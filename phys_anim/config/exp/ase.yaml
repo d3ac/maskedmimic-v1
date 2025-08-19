@@ -1,0 +1,11 @@
+# @package _global_
+
+defaults:
+  - /algo: infomax
+  - /env: amp
+
+env:
+  config:
+    state_init: Random
+
+experiment_name: ase

@@ -1,0 +1,10 @@
+*/babel/*.json
+.idea
+data/hml3d
+results/
+output/
+data/yaml_files
+data/smpl
+data/pretrained_models
+data/amass
+assets
