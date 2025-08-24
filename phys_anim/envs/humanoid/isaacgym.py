@@ -51,12 +51,12 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
         self.w_last = True  # quaternion structure in isaacgym
         self.config = config
         self.device = device
-        self.sim_params = self.parse_sim_params()
+        self.sim_params = self.parse_sim_params() # 在这里获得了一些关于仿真环境的参数（一些从配置文件里面获得，一些是默认写死了的）
         self.physics_engine = gymapi.SIM_PHYSX
 
-        self.plane_static_friction = self.config.simulator.plane.static_friction
-        self.plane_dynamic_friction = self.config.simulator.plane.dynamic_friction
-        self.plane_restitution = self.config.simulator.plane.restitution
+        self.plane_static_friction = self.config.simulator.plane.static_friction # 静摩擦力
+        self.plane_dynamic_friction = self.config.simulator.plane.dynamic_friction # 动摩擦力，这个值决定了物体在地面上从静止状态开始运动所需要克服的摩擦力大小。数值越大，物体越难被推动，需要更大的力才能使其开始移动。
+        self.plane_restitution = self.config.simulator.plane.restitution # 地面反弹系数，这个值决定了物体与地面碰撞时反弹的程度。0：完全非弹性碰撞，1：完全弹性碰撞。（在这里是0）
 
         super().__init__(config, device)
         assert (
@@ -1300,6 +1300,10 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                 )
 
     def setup_character_props(self):
+        """
+        This method sets up the character properties for the humanoid.
+        It sets the DOF body IDs, DOF offsets, DOF observation size, and number of actions.
+        """
         self.dof_body_ids = self.config.robot.dfs_dof_body_ids
         self.dof_offsets = []
         previous_dof_name = "null"
@@ -1308,7 +1312,7 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                 previous_dof_name = dof_name[:-2]
                 self.dof_offsets.append(dof_offset)
         self.dof_offsets.append(len(self.config.robot.dfs_dof_names))
-        self.dof_obs_size = self.config.robot.dof_obs_size
+        self.dof_obs_size = self.config.robot.dof_obs_size # 69 * 2，也就是 23*6，用 3*3 矩阵的前面 6 个作为 observation
         self.num_act = self.config.robot.number_of_actions
 
     def render(self):

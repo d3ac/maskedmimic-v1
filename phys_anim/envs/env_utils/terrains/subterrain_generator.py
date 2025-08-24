@@ -49,14 +49,14 @@ def random_uniform_subterrain(
     downsampled_scale=None,
 ):
     """
-    Generate a uniform noise terrain
+    生成均匀噪声地形
 
-    Parameters
-        terrain (SubTerrain): the terrain
-        min_height (float): the minimum height of the terrain [meters]
-        max_height (float): the maximum height of the terrain [meters]
-        step (float): minimum height change between two points [meters]
-        downsampled_scale (float): distance between two randomly sampled points ( musty be larger or equal to terrain.horizontal_scale)
+    参数
+        subterrain (SubTerrain): 地形对象
+        min_height (float): 地形的最小高度（米）
+        max_height (float): 地形的最大高度（米）
+        step (float): 两点之间的最小高度变化（米）
+        downsampled_scale (float): 随机采样点之间的距离（必须大于等于terrain.horizontal_scale）
 
     """
     if downsampled_scale is None:
@@ -135,14 +135,14 @@ def sloped_subterrain(subterrain: SubTerrain, slope=1):
 
 def pyramid_sloped_subterrain(subterrain: SubTerrain, slope=1, platform_size=1.0):
     """
-    Generate a sloped terrain
+    生成一个金字塔斜坡地形
 
-    Parameters:
-        subterrain (terrain): the terrain
-        slope (int): positive or negative slope
-        platform_size (float): size of the flat platform at the center of the terrain [meters]
-    Returns:
-        terrain (SubTerrain): update terrain
+    参数:
+        subterrain (terrain): 地形对象
+        slope (int): 斜坡坡度，可以为正或负
+        platform_size (float): 地形中心处的平坦平台大小（单位：米），人出生在这个地方就不会倒
+    返回:
+        terrain (SubTerrain): 更新后的地形对象
     """
     x = np.arange(0, subterrain.width)
     y = np.arange(0, subterrain.length)
@@ -152,7 +152,7 @@ def pyramid_sloped_subterrain(subterrain: SubTerrain, slope=1, platform_size=1.0
     xx = (center_x - np.abs(center_x - xx)) / center_x
     yy = (center_y - np.abs(center_y - yy)) / center_y
     xx = xx.reshape(subterrain.width, 1)
-    yy = yy.reshape(1, subterrain.length)
+    yy = yy.reshape(1, subterrain.length) # 现在这个xx和yy就是一个金字塔型的东西了
     max_height = int(
         slope
         * (subterrain.horizontal_scale / subterrain.vertical_scale)
@@ -181,17 +181,17 @@ def discrete_obstacles_subterrain(
     subterrain: SubTerrain, max_height, min_size, max_size, num_rects, platform_size=1.0
 ):
     """
-    Generate a terrain with gaps
+    生成带有离散障碍物的地形，在地上随机生成障碍物
 
-    Parameters:
-        subterrain (terrain): the terrain
-        max_height (float): maximum height of the obstacles (range=[-max, -max/2, max/2, max]) [meters]
-        min_size (float): minimum size of a rectangle obstacle [meters]
-        max_size (float): maximum size of a rectangle obstacle [meters]
-        num_rects (int): number of randomly generated obstacles
-        platform_size (float): size of the flat platform at the center of the terrain [meters]
-    Returns:
-        terrain (SubTerrain): update terrain
+    参数:
+        subterrain (terrain): 地形对象
+        max_height (float): 障碍物的最大高度（范围=[-max, -max/2, max/2, max]，单位：米）
+        min_size (float): 障碍物矩形的最小尺寸（单位：米）
+        max_size (float): 障碍物矩形的最大尺寸（单位：米）
+        num_rects (int): 随机生成的障碍物数量
+        platform_size (float): 地形中心处的平坦平台大小（单位：米）
+    返回:
+        terrain (SubTerrain): 更新后的地形对象
     """
     # switch parameters to discrete units
     subterrain.height_field_raw[:] = 0

@@ -53,97 +53,154 @@ class Terrain:
         self.config = config
         self.device = device
         self.num_scenes = 0
-        self.spacing_between_scenes = config.spacing_between_scenes
-        self.minimal_humanoid_spacing = config.minimal_humanoid_spacing
+        
+        # Config parameters for scene placement
+        self.spacing_between_scenes = config.spacing_between_scenes  # 场景之间的间距 (米)
+        self.minimal_humanoid_spacing = config.minimal_humanoid_spacing  # 人形角色之间的最小间距 (米)
 
-        # place scenes in the border region
-        length = config.map_length * config.num_levels
-        self.num_scenes_per_column = max(
+        # Calculate number of scenes that can fit in one column
+        # 计算一列中可以放置的场景数量
+        length = config.map_length * config.num_levels  # 总地形长度
+        self.num_scenes_per_column = max( # 在这个总长度上，最多可以放置多少个物体，后面假设要放沙发哪些什么，这个就是最大的间距
             math.floor(length / self.spacing_between_scenes), 1
         )
 
-        self.horizontal_scale = config.horizontal_scale
-        self.vertical_scale = config.vertical_scale
-        self.border_size = config.border_size
-        self.env_length = config.map_length
-        self.env_width = config.map_width
-        self.proportions = [
-            np.sum(config.terrain_proportions[: i + 1])
+        # Terrain scaling parameters
+        # 地形缩放参数
+        self.horizontal_scale = config.horizontal_scale  # 水平方向缩放比例 (米/像素)
+        self.vertical_scale = config.vertical_scale      # 垂直方向缩放比例 (米/像素)
+        self.border_size = config.border_size            # 边界区域大小 (米)
+        
+        # Individual environment dimensions
+        # 单个环境的尺寸
+        self.env_length = config.map_length  # 单个环境的长度 (米)
+        self.env_width = config.map_width    # 单个环境的宽度 (米)
+        
+        # Terrain type proportions (cumulative probabilities)
+        # 地形类型比例 (累积概率)
+        self.proportions = [                                  # 一共有8种地形
+            np.sum(config.terrain_proportions[: i + 1])       # 每种地形出现的概率
             for i in range(len(config.terrain_proportions))
         ]
 
-        self.env_rows = config.num_levels
-        self.env_cols = config.num_terrains
-        self.num_maps = self.env_rows * self.env_cols
+        # Grid layout parameters
+        # 网格布局参数
+        self.env_rows = config.num_levels      # 地形难度等级数 (行数)
+        self.env_cols = config.num_terrains    # 地形类型数 (列数)
+        self.num_maps = self.env_rows * self.env_cols  # 总地形块数
+        
+        # Border size in pixels
+        # 边界大小 (像素单位)
         self.border = int(self.border_size / self.horizontal_scale)
 
+        # Initialize scene library and count total scenes
+        # 初始化场景库并统计总场景数
         if scene_lib is not None:
             scene_lib.call_when_terrain_init_scene_spacing(self)
-            self.num_scenes = scene_lib.total_spawned_scenes
+            self.num_scenes = scene_lib.total_spawned_scenes  # 总生成场景数
 
+        # Calculate object playground dimensions
+        # 计算物体游乐场区域尺寸
         scene_rows = (
             0
             if self.num_scenes == 0
             else math.ceil(self.num_scenes / self.num_scenes_per_column) + 2
-        )
-        self.object_playground_depth = scene_rows * self.spacing_between_scenes
-        self.object_playground_buffer_size = int(
-            5 / self.horizontal_scale
-        )  # 5 meters buffer, adjust as needed
+        )  # 场景行数 (包含2行缓冲)
+        self.object_playground_depth = scene_rows * self.spacing_between_scenes  # 物体游乐场深度 (米)
+        self.object_playground_buffer_size = int(5 / self.horizontal_scale)  # 5米缓冲区，转换为像素单位
 
-        total_size = self.num_maps * config.map_length * config.map_width * 1.0
-        space_between_humanoids = total_size / num_envs
+        # Validate humanoid spacing
+        # 验证人形角色间距是否足够
+        total_size = self.num_maps * config.map_length * config.map_width * 1.0  # 总地形面积
+        space_between_humanoids = total_size / num_envs  # 每个人形角色的平均空间
         assert (
             space_between_humanoids >= self.minimal_humanoid_spacing
         ), "Not enough space between humanoids, create a bigger terrain or reduce the number of envs."
 
-        self.width_per_env_pixels = int(self.env_width / self.horizontal_scale)
-        self.length_per_env_pixels = int(self.env_length / self.horizontal_scale)
+        # Convert environment dimensions to pixels
+        # 将环境尺寸转换为像素单位
+        self.width_per_env_pixels = int(self.env_width / self.horizontal_scale)   # 单个环境宽度 (像素)
+        self.length_per_env_pixels = int(self.env_length / self.horizontal_scale) # 单个环境长度 (像素)
 
+        # Calculate total terrain grid dimensions
+        # 计算总地形网格尺寸
         self.object_playground_cols = math.ceil(
             self.object_playground_depth / self.horizontal_scale
-        )
+        )  # 物体游乐场列数 (像素)
+        
+        # Total columns: environments + borders + object playground
+        # 总列数：环境区域 + 边界 + 物体游乐场
         self.tot_cols = (
-            int(self.env_cols * self.width_per_env_pixels)
-            + 2 * self.border
-            + self.object_playground_cols
+            int(self.env_cols * self.width_per_env_pixels)  # 所有环境的总宽度
+            + 2 * self.border                               # 左右边界
+            + self.object_playground_cols                   # 物体游乐场区域
         )
+        
+        # Total rows: environments + borders
+        # 总行数：环境区域 + 边界
         self.tot_rows = (
             int(self.env_rows * self.length_per_env_pixels) + 2 * self.border
         )
 
+        # Initialize terrain height fields and maps
+        # 初始化地形高度场和地图
+        
+        # Main height field storing terrain elevation data (scaled to int16)
+        # 主高度场，存储地形高程数据 (缩放到int16)
         self.height_field_raw = np.zeros((self.tot_rows, self.tot_cols), dtype=np.int16)
+        
+        # Ceiling height field (3 meters high by default)
+        # 这个应该是h上的最大高度
         self.ceiling_field_raw = np.zeros(
             (self.tot_rows, self.tot_cols), dtype=np.int16
         ) + (3 / self.vertical_scale)
 
+        # Walkable area mask (0=walkable, 1=non-walkable)
+        # 可行走区域掩码 (0=可行走, 1=不可行走)
         self.walkable_field_raw = np.zeros(
             (self.tot_rows, self.tot_cols), dtype=np.int16
         )
+        
+        # Flat terrain mask (1=flat by default, 0=marked as flat later)
+        # 平坦地形掩码 (默认1=平坦, 后续0=标记为平坦)
         self.flat_field_raw = np.ones((self.tot_rows, self.tot_cols), dtype=np.int16)
 
+        # Scene placement map (True=occupied by scene, False=free)
+        # 场景放置地图 (True=被场景占用, False=空闲)
         self.scene_map = torch.zeros(
             (self.tot_rows, self.tot_cols), dtype=torch.bool, device=self.device
         )
 
-        if self.config.load_terrain:
+        # Load or generate terrain data
+        # 加载或生成地形数据
+        if self.config.load_terrain:  # 是否加载预生成的地形
             print("Loading a pre-generated terrain")
-            params = torch.load(self.config.terrain_path)
+            params = torch.load(self.config.terrain_path)  # 地形文件路径
             self.height_field_raw = params["height_field_raw"]
             self.walkable_field_raw = params["walkable_field_raw"]
         else:
+            # Generate terrain procedurally based on configuration
+            # 根据配置程序化生成地形
             self.generate_subterrains()
-        self.heightsamples = self.height_field_raw
-        self.vertices, self.triangles = convert_heightfield_to_trimesh(
+            
+        # Create mesh representation for physics simulation
+        # 为物理仿真创建网格表示
+        self.heightsamples = self.height_field_raw  # 高度采样数据
+        self.vertices, self.triangles = convert_heightfield_to_trimesh(   # vertices是顶点（x,y,z），triangles是三角形（三个vertices的索引）
             self.height_field_raw,
             self.horizontal_scale,
             self.vertical_scale,
-            self.config.slope_threshold,
+            self.config.slope_threshold,  # 坡度阈值，用于确定可行走表面
         )
-        self.compute_walkable_coords()
-        self.compute_flat_coords()
+        
+        # Compute coordinate arrays for spawn point sampling
+        # 计算用于生成点采样的坐标数组
+        self.compute_walkable_coords()  # 计算可行走坐标
+        self.compute_flat_coords()      # 计算平坦区域坐标
 
-        if self.config.save_terrain:
+        # Optionally save generated terrain for future use
+        # 可选择保存生成的地形供将来使用
+        if self.config.save_terrain:  # 是否保存生成的地形
             print("Saving this generated terrain")
             torch.save(
                 {
@@ -153,14 +210,17 @@ class Terrain:
                     "triangles": self.triangles,
                     "border_size": self.border_size,
                 },
-                self.config.terrain_path,
+                self.config.terrain_path,  # 保存路径
             )
 
+        # Finalize scene library initialization
+        # 完成场景库初始化
         if scene_lib is not None:
             # Push all scenes to spawn at the edge of the terrain
+            # 将所有场景推到地形边缘生成
             scene_y_offset = (
                 self.tot_cols - self.border - self.object_playground_cols
-            ) * self.horizontal_scale
+            ) * self.horizontal_scale  # 场景Y轴偏移量 (米)
             scene_lib.call_at_terrain_done_init(scene_y_offset)
 
         # # Generate and show the plot
@@ -181,19 +241,19 @@ class Terrain:
             )
 
     def compute_walkable_coords(self):
-        self.walkable_field_raw[: self.border, :] = 1
-        self.walkable_field_raw[:, -(self.border + self.object_playground_cols + self.object_playground_buffer_size) :] = 1
-        self.walkable_field_raw[:, : self.border] = 1
-        self.walkable_field_raw[-self.border :, :] = 1
+        self.walkable_field_raw[: self.border, :] = 1     # 边界区域设置为不能走
+        self.walkable_field_raw[:, -(self.border + self.object_playground_cols + self.object_playground_buffer_size) :] = 1  # 边界区域设置为不能走
+        self.walkable_field_raw[:, : self.border] = 1     # 边界区域设置为不能走
+        self.walkable_field_raw[-self.border :, :] = 1    # 边界区域设置为不能走
 
         self.walkable_field = torch.tensor(self.walkable_field_raw, device=self.device)
 
         walkable_x_indices, walkable_y_indices = torch.where(self.walkable_field == 0)
-        self.walkable_x_coords = walkable_x_indices * self.horizontal_scale
-        self.walkable_y_coords = walkable_y_indices * self.horizontal_scale
+        self.walkable_x_coords = walkable_x_indices * self.horizontal_scale   # 这里是把像素坐标转换为米坐标
+        self.walkable_y_coords = walkable_y_indices * self.horizontal_scale   # 这里是把像素坐标转换为米坐标
 
     def compute_flat_coords(self):
-        self.flat_field_raw[: self.border, :] = 1
+        self.flat_field_raw[: self.border, :] = 1  # 还是设置的边界区域是平坦的
         self.flat_field_raw[
             :,
             -(
@@ -288,6 +348,21 @@ class Terrain:
             )
 
     def curriculum(self, n_subterrains_per_level, n_levels):
+        """
+        n_subterrains_per_level : cols
+        n_levels : rows
+
+        程序化生成一个包含不同难度和类型的地形课程。
+
+        此函数将整个地形划分为一个 `n_levels` x `n_subterrains_per_level` 的网格。
+        网格的每一列（由 `level_idx` 控制）代表一个难度级别，难度随着列索引的增加而增加。
+        网格的每一行（由 `subterrain_idx` 控制）代表一种不同类型的子地形，例如斜坡、
+        楼梯、障碍物等。具体的地形类型是根据预设的比例（`self.proportions`）来选择的。
+
+        参数:
+            n_subterrains_per_level (int): 每个难度级别中包含的子地形类型数量。
+            n_levels (int): 难度级别的数量。
+        """
         for subterrain_idx in range(n_subterrains_per_level):
             for level_idx in range(n_levels):
                 subterrain = SubTerrain(self.config, "terrain", device=self.device)
@@ -300,17 +375,17 @@ class Terrain:
                 start_y = self.border + subterrain_idx * self.width_per_env_pixels
                 end_y = self.border + (subterrain_idx + 1) * self.width_per_env_pixels
 
-                slope = difficulty * 0.4
-                step_height = 0.05 + 0.175 * difficulty
-                discrete_obstacles_height = 0.025 + difficulty * 0.15
-                stepping_stones_size = 2 - 1.8 * difficulty
-                if choice < self.proportions[0]:
-                    if choice < 0.05:
+                slope = difficulty * 0.4  # 斜坡坡度，随难度增加而增大，最大为0.4
+                step_height = 0.05 + 0.175 * difficulty  # 台阶高度，基础为0.05，随难度线性增加，最大为0.225
+                discrete_obstacles_height = 0.025 + difficulty * 0.15  # 离散障碍物高度，基础为0.025，随难度线性增加，最大为0.175
+                stepping_stones_size = 2 - 1.8 * difficulty  # 踏脚石尺寸，随难度增加而减小，最小为0.2
+                if choice < self.proportions[0]:  # 金字塔
+                    if choice < 0.05:                  # 也就是说subterrain_idx == 0 的时候是倒着的金字塔
                         slope *= -1
                     pyramid_sloped_subterrain(
                         subterrain, slope=slope, platform_size=3.0
                     )
-                elif choice < self.proportions[1]:
+                elif choice < self.proportions[1]:  # 金字塔+随机均匀地形
                     if choice < 0.15:
                         slope *= -1
                     pyramid_sloped_subterrain(
@@ -323,7 +398,7 @@ class Terrain:
                         step=0.025,
                         downsampled_scale=0.2,
                     )
-                elif choice < self.proportions[3]:
+                elif choice < self.proportions[3]:  # 台阶，也是金字塔，但是是台阶状的金字塔
                     if choice < self.proportions[2]:
                         step_height *= -1
                     pyramid_stairs_subterrain(
@@ -332,7 +407,7 @@ class Terrain:
                         step_height=step_height,
                         platform_size=3.0,
                     )
-                elif choice < self.proportions[4]:
+                elif choice < self.proportions[4]:  # 离散障碍物
                     discrete_obstacles_subterrain(
                         subterrain,
                         discrete_obstacles_height,
@@ -341,7 +416,7 @@ class Terrain:
                         40,
                         platform_size=3.0,
                     )
-                elif choice < self.proportions[5]:
+                elif choice < self.proportions[5]:  # 踏脚石 （没用）
                     stepping_stones_subterrain(
                         subterrain,
                         stone_size=stepping_stones_size,
@@ -349,12 +424,12 @@ class Terrain:
                         max_height=0.0,
                         platform_size=3.0,
                     )
-                elif choice < self.proportions[6]:
+                elif choice < self.proportions[6]:  # 杆子 （没用）
                     poles_subterrain(subterrain=subterrain, difficulty=difficulty)
                     self.walkable_field_raw[start_x:end_x, start_y:end_y] = (
                         subterrain.height_field_raw != 0
                     )
-                elif choice < self.proportions[7]:
+                elif choice < self.proportions[7]:  # 平坦地形
                     subterrain.terrain_name = "flat"
 
                     flat_border = int(4 / self.horizontal_scale)
@@ -375,12 +450,12 @@ class Terrain:
 
     def mark_scene_location(self, x, y):
         """
-        Mark the location of an scene on the scene map.
+        在场景地图上标记一个场景的位置。
 
-        Args:
-            x (int): X coordinate in terrain map coordinates.
-            y (int): Y coordinate in terrain map coordinates.
-            radius (int): Radius of the scene in terrain map coordinates.
+        参数:
+            x (int): 地形地图中的X坐标。
+            y (int): 地形地图中的Y坐标。
+            radius (int): 场景在地形地图中的半径。
         """
         radius = (
             math.floor(self.spacing_between_scenes * 1.0 / 2 / self.horizontal_scale)
@@ -507,5 +582,6 @@ class Terrain:
             ax.set_xticks([])
             ax.set_yticks([])
 
-        # Show the plot
-        plt.show()
+        # Save the plot to a file
+        fig.savefig("terrain_plot.png", bbox_inches="tight", dpi=150)
+        plt.close(fig)

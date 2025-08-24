@@ -61,6 +61,10 @@ class BaseDisc(DiscHumanoid):  # type: ignore[misc]
     # Set up environment
     ###############################################################
     def setup_character_props(self):
+        """
+        This method sets up the character properties for the discriminator.
+        It sets the discriminator observation size per step.
+        """
         super().setup_character_props()
         if not self.config.disable_discriminator:
             self.discriminator_obs_size_per_step = (

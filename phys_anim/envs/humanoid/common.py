@@ -77,7 +77,7 @@ class BaseHumanoid(Humanoid):
             print("HACK SLOW DOWN")
             self.config.robot.control.control_type = "T"
 
-        self.state_init = self.StateInit[config.state_init] # 从随机的时间点开始设置动作从什么时候开始
+        self.state_init = self.StateInit[config.state_init] # 从随机的时间点开始设置动作
         self.hybrid_init_prob = config.hybrid_init_prob
         self.reset_default_env_ids = []
         self.reset_ref_env_ids = []
@@ -95,25 +95,25 @@ class BaseHumanoid(Humanoid):
         self.isaac_pd = self.config.robot.control.control_type == "isaac_pd"
         self.control_freq_inv = self.config.simulator.sim.control_freq_inv
 
-        self.setup_character_props()
+        self.setup_character_props() # 设置了action space ，dof observation space
 
         # Buffers
         self.obs_buf = torch.zeros(
             (self.num_envs, self.get_obs_size()), device=self.device, dtype=torch.float
         )
-        self.rew_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.float)
-        self.reset_buf = torch.ones(self.num_envs, device=self.device, dtype=torch.long)
-        self.progress_buf = torch.zeros(
+        self.rew_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.float) # 存储每个环境在当前时间步获得的奖励值
+        self.reset_buf = torch.ones(self.num_envs, device=self.device, dtype=torch.long) # 用来标记哪些环境需要在下一个时间步进行重置
+        self.progress_buf = torch.zeros( # 追踪每个环境自上次重置以来已经运行了多少步
             self.num_envs, device=self.device, dtype=torch.long
         )
-        self.terminate_buf = torch.ones(
+        self.terminate_buf = torch.ones( # 用来标记哪些环境需要终止
             self.num_envs, device=self.device, dtype=torch.long
         )
         self.extras = {}
         self.log_dict = {}
 
         self.terrain = None
-        self.force_respawn_on_flat = False
+        self.force_respawn_on_flat = False # 智能体是否一定要出生在平地上
 
         self.create_terrain_and_scene_lib()
 
@@ -167,6 +167,21 @@ class BaseHumanoid(Humanoid):
     # Getters
     ###############################################################
     def get_obs_size(self):
+        """
+            1 个 根节点相对于地面的高度
+            3维位置 (local_body_pos) - 相对于根部的局部位置
+            6维旋转 (local_body_rot_obs) - 用切线法向量表示的旋转
+            3维线速度 (local_body_vel) - 局部坐标系下的线速度
+            3维角速度 (local_body_ang_vel) - 局部坐标系下的角速度
+
+            对于smpl来说:
+            1维: 根部高度
+            69维: 23个非根部身体部位的位置信息 (23 x 3=69)
+            144维: 24个身体部位的旋转信息 (24 x 6=144)
+            72维: 24个身体部位的线速度信息 (24 x 3=72)
+            72维: 24个身体部位的角速度信息 (24 x 3=72)
+            总计: 1 + 69 + 144 + 72 + 72 = 358 维观察值
+        """
         return self.num_obs
 
     def get_action_size(self):
@@ -740,20 +755,31 @@ class BaseHumanoid(Humanoid):
             device=self.device,
         )
 
+        # 初始化地形高度采样数据
+        # 1. 仅地形高度采样 (不包含场景物体)
+        # 用途：用于角色与地形的对齐，特别是在mocap数据与新地形之间的对齐
         self.only_terrain_height_samples = (
             torch.tensor(self.terrain.heightsamples)
             .view(self.terrain.tot_rows, self.terrain.tot_cols)
             .to(self.device)
             * self.terrain.vertical_scale
         )
+        
+        # 2. 包含场景物体的高度采样
+        # 用途：提供传感器视角的高度图投影，考虑场景中的物体（如椅子、桌子等）
         self.height_samples = (
             torch.tensor(self.terrain.heightsamples)
             .view(self.terrain.tot_rows, self.terrain.tot_cols)
             .to(self.device)
             * self.terrain.vertical_scale
         )
-        self.height_points = self.init_height_points()
+        
+        # 3. 初始化高度采样点网格
+        # 用途：预定义高度图观测的网格结构，用于后续的高度查询
+        self.height_points = self.init_height_points() # 在机器人周围定义一个正方形采样区域, 将这个区域划分成均匀的网格（如16×16）, 每个网格点将用于采样地形高度, 最终形成机器人对周围地形的高度图观测
 
+        # 4. 地形观测张量
+        # 用途：存储每个环境的高度图观测数据
         self.terrain_obs = torch.zeros(
             self.num_envs,
             self.num_height_points,

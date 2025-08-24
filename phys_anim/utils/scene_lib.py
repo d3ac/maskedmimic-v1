@@ -86,37 +86,51 @@ class SceneLib:
         self.load_scenes_from_yaml(self.config.scene_yaml_path)
 
     def call_when_terrain_init_scene_spacing(self, terrain: Terrain):
-        self.terrain = terrain
-        self.create_scene_spawn_list()
+        """
+        在地形和场景间距初始化后调用此函数。
 
+        该函数负责初始化与场景和对象相关的各种数据结构，为模拟环境的准备工作。
+        它设置了场景到对象的映射，加载对象数据，并为后续的场景和对象生成做准备。
+
+        Args:
+            terrain (Terrain): 初始化完成的地形对象。
+        """
+        self.terrain = terrain
+        self.create_scene_spawn_list() # 创建场景生成列表，放在了self.scenes里面
+
+        # 确保配置的最大对象数不小于任何场景中的实际对象数
         assert self.config.max_objects_per_scene >= max(
             [len(scene["objects"]) for scene in self.scenes]
         )
+        # 初始化场景到对象ID的映射张量，-1表示没有对象
         self.scene_to_object_ids = torch.full(
             (len(self.scenes), self.config.max_objects_per_scene),
             -1,
             dtype=torch.long,
             device=self._device,
         )
+        # 初始化场景偏移量张量
         self.scene_offsets = torch.zeros(
             (len(self.scenes), 2), dtype=torch.float, device=self._device
         )
 
-        # Populate scene_to_object_ids here
+        # 遍历所有场景，填充场景到对象ID的映射，并建立对象ID和路径的双向映射
         for scene_idx, scene in enumerate(self.scenes):
             for obj_idx, obj in enumerate(scene["objects"]):
                 self.scene_to_object_ids[scene_idx, obj_idx] = obj["id"]
                 self.object_id_to_path.append(obj["path"])
+                # 确认对象ID是连续的
                 assert len(self.object_id_to_path) == obj["id"] + 1
                 self.object_path_to_id[obj["path"]] = obj["id"]
 
-        self.load_object_motions()
+        self.load_object_motions()         # 加载场景中物体的运动数据 （一帧的就是静态物体）
         self.create_object_spawn_list()
 
-        # Create tensors for in_use and single_robot_in_scene
+        # 创建张量以跟踪场景是否正在使用
         self.scene_in_use = torch.zeros(
             len(self.scenes), dtype=torch.bool, device=self._device
         )
+        # 创建张量以标记哪些是单机器人场景
         self.single_robot_in_scene = torch.tensor(
             [scene["single_robot_in_scene"] for scene in self.scenes],
             dtype=torch.bool,
@@ -191,25 +205,37 @@ class SceneLib:
 
     def create_scene_spawn_list(self):
         """
-        Create a list of object spawn positions for all scenes.
+        为所有场景创建一个对象生成位置列表。
 
-        This method processes the raw scenes loaded from the YAML file, randomly selects scenes based on their replication weights,
-        and populates the scenes list. It respects the max_num_objects configuration if set.
+        此方法处理从YAML文件加载的原始场景，根据它们的复制权重随机选择场景，
+        并填充场景列表。如果设置了 max_num_objects，则会遵守该配置。
 
-        The method also initializes the self.scenes list with the selected scenes and keeps track of how many times each scene
-        has been replicated.
+        该方法还会使用选定的场景初始化 self.scenes 列表，并跟踪每个场景被复制的次数。
 
         Side effects:
-            - Populates self.scenes with selected scene configurations.
-            - Updates the 'replications' count for each scene in self.raw_scenes.
+            - 使用选定的场景配置填充 self.scenes。
+            - 更新 self.raw_scenes 中每个场景的 'replications' 计数。
 
-        Prints:
-            - The total number of objects to be spawned.
-            - The number of scenes to be spawned.
+        打印:
+            - 将要生成的对象总数。
+            - 将要生成的场景数量。
+
+        +---------------------------------------------------------------------------+
+        |                            BORDER                                         |
+        +-------------------------------+-------------------------------------------+
+        |                               |                                           |
+        |           BORDER              |           Object Playground               |
+        |                               |       (where your scenes placed)          |
+        |          40 len               |                  200 len                  |
+        +-------------------------------+-------------------------------------------+
+        |                            BORDER                                         |
+        +---------------------------------------------------------------------------+
+
+
         """
         total_objects = self.total_num_objects()
 
-        print(f"Will spawn a total of {total_objects} objects.")
+        print(f"will spawn {total_objects} objects.")
         total_spawned_objects = 0
 
         weighted_scenes = [
@@ -227,15 +253,15 @@ class SceneLib:
                 weights=[w for _, w in weighted_scenes],
                 k=1,
             )[0]
-            weighted_scenes[scene_index][1] -= 1
+            weighted_scenes[scene_index][1] -= 1 # 在这里标记了后面又弹出去了
 
             # Calculate scene position in terrain coordinates
-            x_offset = (
+            x_offset = (                                                     # 计算放在哪一排
                 (scene_count % self.terrain.num_scenes_per_column + 1)
                 * self.terrain.spacing_between_scenes
                 + self.terrain.border * self.terrain.horizontal_scale
             )
-            y_offset = (
+            y_offset = (                                                     # 计算放在哪一列
                 scene_count // self.terrain.num_scenes_per_column + 1
             ) * self.terrain.spacing_between_scenes
 
@@ -245,7 +271,7 @@ class SceneLib:
             scene_copy["x_offset"] = x_offset
             scene_copy["y_offset"] = y_offset
             scene_copy["objects"] = []
-            # If force_single_robot_per_scene is True, then we only allow one robot per scene (force "dynamic" on all scenes)
+            # 如果 force_single_robot_per_scene 为 True，则每个场景只允许一个机器人（强制所有场景为“动态”）
             scene_copy["single_robot_in_scene"] = (
                 self.config.force_single_robot_per_scene
             )
@@ -256,7 +282,7 @@ class SceneLib:
                 scene_copy["objects"].append(obj_copy)
                 if not obj_copy["is_static"]:
                     scene_copy["single_robot_in_scene"] = (
-                        True  # If any object is not static, the scene can't be interacted by multiple robots
+                        True  # 如果任何对象是动态的，则该场景不能被多个机器人交互
                     )
                 object_id += 1
                 total_spawned_objects += 1
@@ -286,21 +312,21 @@ class SceneLib:
 
     def load_object_motions(self):
         """
-        Load motion data for all objects in the scene.
+        为场景中的所有对象加载运动数据。
 
-        This method processes all scenes and objects to:
-        1. Load motion data for each object with a specified motion path.
-        2. Create default static motion data for objects without a motion path.
-        3. Populate the object_translations and object_rotations tensors with the loaded motion data.
-        4. Set up motion_lengths, motion_starts, and motion_dts for each object to track their motion sequences.
+        该方法处理所有场景和对象，以实现以下功能：
+        1. 为每个具有指定运动路径的对象加载运动数据。
+        2. 为没有运动路径的对象创建默认的静态运动数据。
+        3. 使用加载的运动数据填充 object_translations 和 object_rotations 张量。
+        4. 为每个对象设置 motion_lengths、motion_starts 和 motion_dts, 以跟踪其运动序列。
 
-        After execution, the following attributes are populated:
-        - object_translations: Tensor containing all object translations.
-        - object_rotations: Tensor containing all object rotations.
-        - motion_lengths: Tensor containing the length of motion for each object in seconds.
-        - motion_starts: Tensor containing the starting index of each object's motion in the translation and rotation tensors.
-        - motion_dts: Tensor containing the time step (1/fps) for each object's motion.
-        - motion_num_frames: Tensor containing the number of frames for each object's motion.
+        执行后，将填充以下属性：
+        - object_translations: 包含所有对象平移的张量。
+        - object_rotations: 包含所有对象旋转的张量。
+        - motion_lengths: 包含每个对象运动长度（以秒为单位）的张量。
+        - motion_starts: 包含每个对象运动在平移和旋转张量中起始索引的张量。
+        - motion_dts: 包含每个对象运动的时间步长 (1/fps) 的张量。
+        - motion_num_frames: 包含每个对象运动的帧数的张量。
         """
         total_motion_length = 0
         motion_data = []
@@ -314,7 +340,7 @@ class SceneLib:
                 object_id = obj["id"]
                 motion_path = obj.get("motion")
 
-                if motion_path:
+                if motion_path: # 对于每一个物体来说，他的运动文件里面都只包含了一帧的数据
                     object_motion_data = self._load_motion(motion_path)
                     motion_length = object_motion_data["translation"].shape[0]
                     total_motion_length += motion_length
@@ -324,7 +350,7 @@ class SceneLib:
                     motion_lengths_list.append(motion_length * dt)
                     motion_dts_list.append(dt)
                     motion_num_frames_list.append(motion_length)
-                else:
+                else:                                              # 没进来过
                     motion_data.append(
                         (
                             object_id,
@@ -337,13 +363,13 @@ class SceneLib:
                         )
                     )
                     total_motion_length += 1
-                    motion_lengths_list.append(1.0 / 30)  # -1 indicates a static object
+                    motion_lengths_list.append(1.0 / 30)  # -1 表示静态物体
                     motion_dts_list.append(1.0 / 30)
                     motion_num_frames_list.append(1)
 
         total_objects = len(motion_lengths_list)
 
-        # Object translation and rotation are local with respect to the scene coordinates.
+        # 物体的平移和旋转是相对于场景坐标系的局部坐标。
         self.object_translations = torch.zeros(
             (total_motion_length, 3), device=self._device
         )
@@ -351,27 +377,27 @@ class SceneLib:
             (total_motion_length, 4), device=self._device
         )
 
-        # The length of each motion, in seconds.
+        # 每个物体运动的时长（单位：秒）。
         self.motion_lengths = torch.tensor(
             motion_lengths_list, dtype=torch.float, device=self._device
         )
 
-        # Similar to MotionLib, the translation and rotation tensors are a single long tensor.
-        # we use the motion_starts to map motion identifier to the starting position of the motion sqeuence in the unified tensor.
+        # 类似于 MotionLib，平移和旋转张量是一个长张量。
+        # 我们使用 motion_starts 将运动标识符映射到统一张量中运动序列的起始位置。
         self.motion_starts = torch.zeros(
             total_objects, dtype=torch.long, device=self._device
         )
         self.motion_dts = torch.tensor(
             motion_dts_list, dtype=torch.float, device=self._device
         )
-        self.motion_num_frames = torch.tensor(
+        self.motion_num_frames = torch.tensor(                      # 每个物体运动的帧数 (都是1)
             motion_num_frames_list, dtype=torch.long, device=self._device
         )
 
-        # CT hack: Offsets, both translation and rotation, is a hack to fix issues with obj files.
-        # For example, in the SAMP dataset the objects "forward" direction points to the side.
-        # The controller observes the orientation of the object.
-        # We use the rotation offset to rotate the orientation perceived by the controller.
+        # CT hack：平移和旋转的 offset 是为了解决 obj 文件中的问题。
+        # 例如，在 SAMP 数据集中，物体的“前进”方向实际上指向侧面。
+        # 控制器观测到的是物体的朝向。
+        # 我们使用旋转 offset 来修正控制器感知到的朝向。
         self.object_translation_offsets = torch.zeros(
             (total_objects, 3), device=self._device
         )
@@ -513,9 +539,9 @@ class SceneLib:
 
     def create_object_spawn_list(self):
         """
-        Create a list of object spawn positions for all scenes, without specific pose information.
+        为所有场景创建物体生成位置列表，不包含具体的位姿信息。
 
-        This method populates the self.object_spawn_list class variable.
+        此方法会填充 self.object_spawn_list 类变量。
         """
         for scene_idx, scene in enumerate(self.scenes):
             for obj_idx, obj in enumerate(scene["objects"]):
@@ -528,7 +554,7 @@ class SceneLib:
                             "scene_idx": scene_idx,
                             "object_id": object_id,
                             "is_static": obj["is_static"],
-                            "object_options": obj.get("object_options", {}),
+                            "object_options": obj.get("object_options", {}), # 一些物体的物理参数，不太用管
                         }
                     )
                 )

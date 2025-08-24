@@ -8,3 +8,6 @@ data/smpl
 data/pretrained_models
 data/amass
 assets
+__pycache__/
+**/__pycache__/
+*.pyc
