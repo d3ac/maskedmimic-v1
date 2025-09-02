@@ -1,5 +1,4 @@
-fork from https://github.com/NVlabs/ProtoMotions
-
+fork from https://github.com/NVlabs/ProtoMotions, This project is merely for my own convenience in archiving, so please everyone go check out the official implementation, haha.
 # ProtoMotions: Physics-based Character Animation
 *“Primitive or fundamental types of movement that serve as a basis for more complex motions.”*
 
