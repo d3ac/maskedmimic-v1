@@ -1,37 +1,6 @@
 fork from https://github.com/NVlabs/ProtoMotions, This project is merely for my own convenience in archiving, so please everyone go check out the official implementation, haha.
-# ProtoMotions: Physics-based Character Animation
-*“Primitive or fundamental types of movement that serve as a basis for more complex motions.”*
 
-- [What is this?](#what-is-this)
-- [Installation guide](#installation)
-- [Training built-in agents](#training-your-agent)
-- [Evaluating your agent](#evaluationvisualization)
-- [Building your own agent/environment](#code-structure-how-can-i-build-my-own-stuff)
-
-# What is this?
-
-This codebase contains our efforts in building interactive physically-simulated virtual agents.
-It supports both IsaacGym and IsaacSim.
-
-<div float="center">
-    <img src="assets/sofa.gif" width="300"/>
-    <img src="assets/vr-cartwheel.gif" width="300"/>
-    <img src="assets/reach.gif" width="300"/>
-    <img src="assets/path.gif" width="300"/>
-</div>
-
-# Changelog
-
-<details>
-<summary>v1.0</summary>
-
-Public release!
-
-</details>
-
-> **Important:**</br>
-> This codebase builds heavily on [Hydra](https://hydra.cc/) and [OmegaConfig](https://omegaconf.readthedocs.io/).<br>
-> It is recommended to familiarize yourself with these libraries and how config composition works.
+stage 1 : CUDA_VISIBLE_DEVICES=2,3,4,5,6,7 python phys_anim/train_agent.py +exp=full_body_tracker +robot=smpl +backbone=isaacgym motion_file=data/hml3d/train_val.pt ngpu=6 auto_load_latest=True algo.config.batch_size=4096
 
 # Installation
 
