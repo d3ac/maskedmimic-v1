@@ -2,7 +2,7 @@ fork from https://github.com/NVlabs/ProtoMotions, This project is merely for my 
 
 stage 1 : CUDA_VISIBLE_DEVICES=2,3,4,5,6,7 python phys_anim/train_agent.py +exp=full_body_tracker +robot=smpl +backbone=isaacgym motion_file=data/hml3d/train_val.pt ngpu=6 auto_load_latest=True algo.config.batch_size=4096
 
-stage 2 : python phys_anim/train_agent.py +exp=masked_mimic +robot=smpl +backbone=isaacgym motion_file=data/hml3d/train_val.pt gt_actor_path=results/maskedmimic ngpu=1 auto_load_latest=True algo.config.batch_size=4096
+stage 2 : python phys_anim/train_agent.py +exp=masked_mimic +robot=smpl +backbone=isaacgym motion_file=data/hml3d/train_val.pt gt_actor_path=results/full_body_tracker_old ngpu=6 auto_load_latest=True algo.config.batch_size=2048 num_envs=2048
 # Installation
 
 This codebase supports both IsaacGym and IsaacSim. You can install one or both and
