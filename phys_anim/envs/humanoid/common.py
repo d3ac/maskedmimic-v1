@@ -125,7 +125,7 @@ class BaseHumanoid(Humanoid):
 
         super().__init__(config, device)
 
-        # After objects have been populated, finalize structure
+        # 在所有物体被添加后，进行结构的最终整理
         if self.config.scene_lib is not None:
             self.scene_position = torch.stack(self.scene_position)
             self.object_id_to_scene_id = torch.tensor(
@@ -138,7 +138,7 @@ class BaseHumanoid(Humanoid):
                 self.object_root_states_offsets
             )
             self.object_target_position = torch.stack(self.object_target_position)
-            self.env_id_to_object_ids = (
+            self.env_id_to_object_ids = (         # 在环境重置的时候再初始化
                 torch.zeros(
                     self.num_envs,
                     self.scene_lib.config.max_objects_per_scene,
@@ -153,8 +153,8 @@ class BaseHumanoid(Humanoid):
         )
         self.motion_times = torch.zeros(self.num_envs, device=self.device)
 
-        # A tensor to store the scene IDs for each environment.
-        # -1 indicates no scene.
+        # 存储每个环境对应的场景ID，
+        # -1表示没有场景
         self.scene_ids = (
             torch.zeros(self.num_envs, dtype=torch.long, device=self.device) - 1
         )
@@ -198,12 +198,11 @@ class BaseHumanoid(Humanoid):
         scene_ids: torch.tensor = None,
     ):
         """
-        Samples a new starting position. This takes into account scene and terrain requirements.
-        force_respawn_on_flat ensures the character is spawned on flat terrain.
-        When provided a valid scene_id, the character will be spawned relative to the scene.
+        采样新的起始位置。该方法会考虑场景和地形的要求。
+        force_respawn_on_flat 参数确保角色出生在平坦地形上。
+        如果提供了有效的 scene_id，角色将相对于该场景进行出生。
 
-        For non-scene and non-flat env_ids, we sample a random valid coordinate and then shift the vertical offset
-        relative to the terrain.
+        对于没有场景且不要求平地的 env_ids，会随机采样一个有效坐标，并根据地形调整垂直偏移。
         """
         xy_position = torch.zeros((len(env_ids), 2), device=self.device)
         xy_position[:, :2] += offset
@@ -789,12 +788,12 @@ class BaseHumanoid(Humanoid):
 
     def get_ground_heights(self, root_states):
         """
-        This provides the height of the ground beneath the character.
-        Not to confuse with the height-map projection that a sensor would see.
-        Use this function for alignment between mocap and new terrains.
+        # 该函数用于获取角色正下方地面的高度。
+        # 注意不要与传感器看到的高度图投影混淆。
+        # 使用此函数可实现动作捕捉数据与新地形之间的对齐。
         """
-        height_samples = self.only_terrain_height_samples
-        horizontal_scale = self.terrain.horizontal_scale
+        height_samples = self.only_terrain_height_samples # 纯地形高度数据
+        horizontal_scale = self.terrain.horizontal_scale  # 地形的水平缩放
 
         return get_heights(
             root_states=root_states,
@@ -942,6 +941,16 @@ class BaseHumanoid(Humanoid):
         raise NotImplementedError
 
     def build_body_ids_tensor(self, body_names):
+        """
+        根据给定的 body_names（身体部位名称列表），查找每个部位在 self.body_names（所有身体部位名称列表）中的索引，
+        并将这些索引（即 body_id）组成一个张量返回。
+
+        参数:
+            body_names (list[str]): 需要查找的身体部位名称列表。
+
+        返回:
+            torch.Tensor: 包含所有 body_names 对应索引的长整型张量，位于 self.device 上。
+        """
         body_ids = []
 
         for body_name in body_names:
@@ -1165,13 +1174,27 @@ class BaseHumanoid(Humanoid):
         self.default_dof_pos = self.default_dof_pos.unsqueeze(0)
 
     def process_dof_props(self, props):
+        """
+        处理每个关节的属性,主要是提取每个自由度(DOF)的最大力矩限制(torque limit),并保存到 self.torque_limits 张量中.
+
+        详细说明:
+        - 该函数首先判断当前控制类型是否为 "isaac_pd". 如果是,则直接返回,不做处理(因为 isaac_pd 控制器不需要单独设置 torque limit).
+        - 否则,为每个自由度分配一个张量 self.torque_limits,长度为关节数(self.num_dof),用于存储每个关节的最大力矩限制.
+        - 遍历传入的 props(通常为 Isaac Gym 资产的关节属性字典),将每个关节的 "effort"(最大力矩/力)属性提取出来,赋值到 self.torque_limits.
+        - 这样后续在控制或仿真过程中,可以方便地访问每个关节的最大力矩限制.
+
+        参数:
+            props: 包含每个关节属性的字典,通常由仿真环境返回, props["effort"] 是一个数组,表示每个关节的最大力矩/力.
+        """
         if self.config.robot.control.control_type == "isaac_pd":
-            # Only create tensors for simulated robotic humanoids.
+            # 如果是 isaac_pd 控制器，不需要处理 torque limit，直接返回
             return
 
+        # 初始化 torque_limits 张量，存储每个关节的最大力矩限制
         self.torque_limits = torch.zeros(
             self.num_dof, dtype=torch.float, device=self.device, requires_grad=False
         )
+        # 遍历每个关节，将其最大力矩限制写入 torque_limits
         for i in range(len(props)):
             self.torque_limits[i] = props["effort"][i].item()
 

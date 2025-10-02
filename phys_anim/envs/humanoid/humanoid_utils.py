@@ -83,46 +83,75 @@ def compute_humanoid_reward(obs_buf: Tensor) -> Tensor:
 def build_pd_action_offset_scale(
     dof_offsets, dof_limits_lower, dof_limits_upper, device
 ):
+    """
+    为PD控制器计算动作的偏移(offset)和缩放(scale)。
+
+    这个函数将强化学习策略网络输出的标准化动作（通常在[-1, 1]范围内）
+    转换为PD控制器所需的目标关节位置。
+    转换公式为: target_dof_pos = pd_action_offset + pd_action_scale * action(这个是policy的输出(-1,1))
+
+    Args:
+        dof_offsets (list): 每个关节自由度(DOF)在扁平化数组中的起始索引。
+        dof_limits_lower (torch.Tensor): 每个DOF的运动范围下限。
+        dof_limits_upper (torch.Tensor): 每个DOF的运动范围上限。
+        device (str): PyTorch设备（'cpu'或'cuda'）。
+
+    Returns:
+        (torch.Tensor, torch.Tensor): (pd_action_offset, pd_action_scale)
+            - pd_action_offset: 动作的中心偏移量。
+            - pd_action_scale: 动作的缩放因子。
+    """
     num_joints = len(dof_offsets) - 1
 
+    # 将关节限制从Tensor转换为NumPy数组，并移到CPU上以便操作
     lim_low = dof_limits_lower.cpu().numpy()
     lim_high = dof_limits_upper.cpu().numpy()
 
+    # 遍历每个关节，根据其自由度数量（dof_size）调整其动作范围
     for j in range(num_joints):
         dof_offset = dof_offsets[j]
         dof_size = dof_offsets[j + 1] - dof_offsets[j]
 
+        # 对于3自由度的关节（如球状关节，通常用于表示旋转）
         if dof_size == 3:
+            # 获取当前关节三个自由度的原始运动范围
             curr_low = lim_low[dof_offset : (dof_offset + dof_size)]
             curr_high = lim_high[dof_offset : (dof_offset + dof_size)]
-            curr_low = np.max(np.abs(curr_low))
-            curr_high = np.max(np.abs(curr_high))
-            curr_scale = max([curr_low, curr_high])
+            
+            # 计算一个新的对称范围。取所有限制绝对值的最大值，
+            # 乘以1.2作为缓冲，并确保不超过pi（180度）。
+            # 这为旋转关节创建了一个统一且合理的动作空间。
+            curr_scale = max([np.max(np.abs(curr_low)), np.max(np.abs(curr_high))])
             curr_scale = 1.2 * curr_scale
             curr_scale = min([curr_scale, np.pi])
 
+            # 将此关节的运动范围更新为新的对称范围[-curr_scale, curr_scale]
             lim_low[dof_offset : (dof_offset + dof_size)] = -curr_scale
             lim_high[dof_offset : (dof_offset + dof_size)] = curr_scale
 
-            # lim_low[dof_offset:(dof_offset + dof_size)] = -np.pi
-            # lim_high[dof_offset:(dof_offset + dof_size)] = np.pi
-
+        # 对于1自由度的关节（如铰链关节）
         elif dof_size == 1:
             curr_low = lim_low[dof_offset]
             curr_high = lim_high[dof_offset]
             curr_mid = 0.5 * (curr_high + curr_low)
 
-            # extend the action range to be a bit beyond the joint limits so that the motors
-            # don't lose their strength as they approach the joint limits
+            # 为了防止电机在接近关节极限时失去力量，这里将动作范围适度扩大。
+            # 新的范围宽度是原始范围的70% * 2 = 140%。
             curr_scale = 0.7 * (curr_high - curr_low)
             curr_low = curr_mid - curr_scale
             curr_high = curr_mid + curr_scale
 
+            # 更新此关节的运动范围
             lim_low[dof_offset] = curr_low
             lim_high[dof_offset] = curr_high
 
+    # 基于调整后的关节运动范围，计算最终的偏移和缩放因子
+    # 偏移是新范围的中点
     pd_action_offset = 0.5 * (lim_high + lim_low)
+    # 缩放是新范围宽度的一半
     pd_action_scale = 0.5 * (lim_high - lim_low)
+    
+    # 将计算结果转换回PyTorch Tensor，并移动到指定设备
     pd_action_offset = torch.tensor(pd_action_offset, device=device)
     pd_action_scale = torch.tensor(pd_action_scale, device=device)
 

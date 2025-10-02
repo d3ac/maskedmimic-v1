@@ -129,7 +129,7 @@ def main(
             print(f"Processing {filename}")
             try:
                 relative_path_dir = filename.relative_to(data_dir).parent
-                relative_path_dir.mkdir(exist_ok=True, parents=True)
+                # relative_path_dir.mkdir(exist_ok=True, parents=True)
 
                 outpath = (
                     output_dir

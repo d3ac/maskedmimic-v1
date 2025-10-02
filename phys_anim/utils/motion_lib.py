@@ -83,7 +83,7 @@ class LoadedMotions(nn.Module):
         self.motion_files = motion_files
         self.register_buffer("motion_lengths", motion_lengths, persistent=False)
         self.register_buffer("motion_weights", motion_weights, persistent=False)
-        self.register_buffer("motion_timings", motion_timings, persistent=False)
+        self.register_buffer("motion_timings", motion_timings, persistent=False) # 每一个动作的有效开始和结束的时间
         self.register_buffer("motion_fps", motion_fps, persistent=False)
         self.register_buffer("motion_dt", motion_dt, persistent=False)
         self.register_buffer("motion_num_frames", motion_num_frames, persistent=False)
@@ -137,17 +137,17 @@ class MotionLib(DeviceDtypeModuleMixin):
         w_last: bool = True,
     ):
         super().__init__()
-        self.w_last = w_last
-        self.fix_heights = fix_motion_heights
-        self.skeleton_tree = skeleton_tree
-        self.create_text_embeddings = create_text_embeddings
-        self.dof_body_ids = dof_body_ids
-        self.dof_offsets = dof_offsets
-        self.num_dof = dof_offsets[-1]
-        self.ref_height_adjust = ref_height_adjust
-        self.rb_conversion = rb_conversion
-        self.dof_conversion = dof_conversion
-        self.local_rot_conversion = local_rot_conversion
+        self.w_last = w_last # 是否四元数最后一位为w分量 （实部）
+        self.fix_heights = fix_motion_heights # 是否修正运动高度
+        self.skeleton_tree = skeleton_tree # 骨骼树结构
+        self.create_text_embeddings = create_text_embeddings # 是否创建文本嵌入
+        self.dof_body_ids = dof_body_ids # 每个自由度对应的刚体id
+        self.dof_offsets = dof_offsets # 每个关节在自由度列表中的起始偏移
+        self.num_dof = dof_offsets[-1] # 总自由度数量
+        self.ref_height_adjust = ref_height_adjust # 参考高度修正值
+        self.rb_conversion = rb_conversion # 刚体转换矩阵
+        self.dof_conversion = dof_conversion # 自由度转换矩阵
+        self.local_rot_conversion = local_rot_conversion # 局部旋转转换矩阵
 
         self.register_buffer(
             "key_body_ids",
@@ -237,7 +237,7 @@ class MotionLib(DeviceDtypeModuleMixin):
 
         lengths = self.state.motion_num_frames
         lengths_shifted = lengths.roll(1)
-        lengths_shifted[0] = 0
+        lengths_shifted[0] = 0                # 这个变量意思就是说，每个动作是从哪里开始的，所以全部右移一个然后第一个清零
         self.register_buffer(
             "length_starts", lengths_shifted.cumsum(0), persistent=False
         )
@@ -487,23 +487,32 @@ class MotionLib(DeviceDtypeModuleMixin):
     def get_motion_state(
         self, sub_motion_ids, motion_times, joint_3d_format="exp_map"
     ) -> MotionState:
+        # ------------------------------------ 1. 输入处理与帧计算 ---------------------------------
+        # 将子动作ID映射到全局动作ID
         motion_ids = self.state.sub_motion_to_motion[sub_motion_ids]
 
+        # 获取动作长度，并将输入时间裁剪到有效范围内 [0, motion_len]
         motion_len = self.state.motion_lengths[motion_ids]
         motion_times = motion_times.clip(min=0).clip(
             max=motion_len
         )  # Making sure time is in bounds
 
+        # 获取动作的总帧数和每帧的时间间隔 (dt)
         num_frames = self.state.motion_num_frames[motion_ids]
         dt = self.state.motion_dt[motion_ids]
 
+        # 根据时间点计算用于插值的前后两个关键帧索引(frame_idx0, frame_idx1)和混合权重(blend)
         frame_idx0, frame_idx1, blend = self._calc_frame_blend(
             motion_times, motion_len, num_frames, dt
         )
 
+        # ------------------------------------ 2. 从关键帧提取数据 ---------------------------------
+        # 计算在全局数据张量中的绝对帧索引
         f0l = frame_idx0 + self.length_starts[motion_ids]
         f1l = frame_idx1 + self.length_starts[motion_ids]
 
+        # 从两个关键帧(f0l, f1l)中提取所有相关的运动数据
+        # 包括根关节、局部关节、速度、角速度等信息
         root_pos0 = self.gts[f0l, 0]
         root_pos1 = self.gts[f1l, 0]
 
@@ -537,6 +546,7 @@ class MotionLib(DeviceDtypeModuleMixin):
         rb_rot0 = self.grs[f0l]
         rb_rot1 = self.grs[f1l]
 
+        # (调试用) 检查所有提取出的张量数据类型是否正确
         vals = [
             root_pos0,
             root_pos1,
@@ -562,11 +572,16 @@ class MotionLib(DeviceDtypeModuleMixin):
         for v in vals:
             assert v.dtype != torch.float64
 
+        # ------------------------------------ 3. 插值计算目标状态 ---------------------------------
+        # 准备混合权重张量(blend)以便进行广播运算
         blend = blend.unsqueeze(-1)
 
+        # 对位置和速度等数据进行线性插值
         root_pos: Tensor = (1.0 - blend) * root_pos0 + blend * root_pos1
+        # 应用参考高度调整
         root_pos[:, 2] += self.ref_height_adjust
 
+        # 对旋转数据(四元数)进行球面线性插值 (slerp)
         root_rot: Tensor = torch_utils.slerp(root_rot0, root_rot1, blend)
 
         blend_exp = blend.unsqueeze(-1)
@@ -577,11 +592,15 @@ class MotionLib(DeviceDtypeModuleMixin):
             local_rot0, local_rot1, torch.unsqueeze(blend, axis=-1)
         )
 
+        # 计算关节自由度(DOF)的位置
         if hasattr(self, "dof_pos"):  # H1 joints
+            # 针对H1模型，直接插值
             dof_pos = (1.0 - blend) * self.dof_pos[f0l] + blend * self.dof_pos[f1l]
         else:
+            # 其他模型，通过局部旋转计算得到
             dof_pos: Tensor = self._local_rotation_to_dof(local_rot, joint_3d_format)
 
+        # 对其他速度和位置数据进行插值
         root_vel = (1.0 - blend) * root_vel0 + blend * root_vel1
         root_ang_vel = (1.0 - blend) * root_ang_vel0 + blend * root_ang_vel1
         dof_vel = (1.0 - blend) * dof_vel0 + blend * dof_vel1
@@ -592,11 +611,15 @@ class MotionLib(DeviceDtypeModuleMixin):
         global_ang_vel = (
             1.0 - blend_exp
         ) * global_ang_vel0 + blend_exp * global_ang_vel1
+        
+        # ------------------------------------ 4. 数据格式转换与重排 ---------------------------------
+        # 如果四元数的格式不是 w 在最后 (w_last=False)，则转换为 wxyz 格式
         if not self.w_last:
             root_rot = rotations.xyzw_to_wxyz(root_rot)
             rb_rot = rotations.xyzw_to_wxyz(rb_rot)
             local_rot = rotations.xyzw_to_wxyz(local_rot)
 
+        # 根据机器人模型的具体定义，对刚体(rb)、自由度(dof)和局部旋转(local_rot)数据进行重排，以匹配仿真环境
         if self.rb_conversion is not None:
             rb_pos = rb_pos[:, self.rb_conversion]
             rb_rot = rb_rot[:, self.rb_conversion]
@@ -608,6 +631,8 @@ class MotionLib(DeviceDtypeModuleMixin):
         if self.local_rot_conversion is not None:
             local_rot = local_rot[:, self.local_rot_conversion]
 
+        # ------------------------------------ 5. 封装并返回运动状态 ---------------------------------
+        # 将所有计算出的数据封装到 MotionState 对象中
         motion_state = MotionState(
             root_pos=root_pos,
             root_rot=root_rot,
@@ -818,7 +843,7 @@ class MotionLib(DeviceDtypeModuleMixin):
 
                 if "sub_motions" not in motion_entry:
                     motion_entry.sub_motions = [deepcopy(motion_entry)]
-                    motion_entry.sub_motions[0].idx = motion_index
+                    motion_entry.sub_motions[0].idx = motion_index # 其实没暖用，都是对的
 
                 for sub_motion in sorted(
                     motion_entry.sub_motions, key=lambda x: int(x.idx)
@@ -830,7 +855,7 @@ class MotionLib(DeviceDtypeModuleMixin):
 
                     motion_weights.append(curr_weight)
 
-                    sub_motion_to_motion.append(motion_id)
+                    sub_motion_to_motion.append(motion_id) 
 
                     ref_respawn_offset = sub_motion.get("ref_respawn_offset", 0)
                     ref_respawn_offsets.append(ref_respawn_offset)
@@ -847,9 +872,9 @@ class MotionLib(DeviceDtypeModuleMixin):
 
                     sub_motion_labels = []
                     if "labels" in sub_motion:
-                        # We assume 3 labels for each motion.
-                        # If there are fewer than 3 labels, the last label is repeated to fill the list.
-                        # If there are no labels, an empty string is used as the label.
+                        # 我们假设每个动作有3个标签。
+                        # 如果标签少于3个，则重复最后一个标签以补足数量。
+                        # 如果没有标签，则使用空字符串作为标签。
                         for label in sub_motion.labels:
                             sub_motion_labels.append(label)
                             if len(sub_motion_labels) == 3:
@@ -1122,7 +1147,7 @@ def fix_motion_fps(motion, orig_fps, target_frame_rate, skeleton_tree):
 
     skip = int(np.round(orig_fps / target_frame_rate))
 
-    lr = motion.local_rotation[::skip]
+    lr = motion.local_rotation[::skip] # 每一个关节相对于其父关节的局部旋转
     rt = motion.root_translation[::skip]
 
     new_sk_state = SkeletonState.from_rotation_and_root_translation(

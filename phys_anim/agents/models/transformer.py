@@ -68,7 +68,7 @@ class TransformerWithNorm(nn.Module):
         self.obs_encoder = MLP_WithNorm(
             config.obs_mlp, num_in, config.latent_dim - config.type_embedding_dim
         )
-        num_entries = 1
+        num_entries = 1 # 1 这部分指的是obs_encoder
 
         self.extra_input_keys = []
         self.mask_keys = {}
@@ -76,14 +76,14 @@ class TransformerWithNorm(nn.Module):
             self.extra_input_keys = sorted(config.extra_inputs.keys())
 
             for extra_input_key, extra_input in config.extra_inputs.items():
-                if extra_input is None:
+                if extra_input is None:                                            # 如果extra_input为None，则删除extra_input_key
                     self.extra_input_keys.remove(extra_input_key)
                     continue
-                if extra_input.config.get("mask_key", None) is not None:
+                if extra_input.config.get("mask_key", None) is not None:           # 如果有掩码，就在 self.mask_keys 字典中记录下这种对应关系
                     self.mask_keys[extra_input_key] = extra_input.config.mask_key
                     self.extra_input_keys.remove(extra_input.config.mask_key)
                 else:
-                    self.mask_keys[extra_input_key] = None
+                    self.mask_keys[extra_input_key] = None                         # 如果这个输入没有关联的掩码，就记录为 None
 
             num_entries += len(self.extra_input_keys)
 

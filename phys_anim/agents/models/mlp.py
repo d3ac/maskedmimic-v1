@@ -35,7 +35,7 @@ from phys_anim.utils import model_utils
 
 
 def build_mlp(config, num_in: int, num_out: int):
-    init = INIT_DICT[config.initializer]
+    init = INIT_DICT[config.initializer] # 初始化偏置为 0
 
     indim = num_in
     layers = []
@@ -125,7 +125,7 @@ class MultiHeadedMLP(MLP_WithNorm):
                 [cat_obs, self.extra_input_models[key](key_obs)], dim=-1
             )
 
-        outs: Tensor = self.trunk(cat_obs)
+        outs: Tensor = self.trunk(cat_obs) # 在这里 forward
 
         if return_norm_obs:
             assert not already_normalized

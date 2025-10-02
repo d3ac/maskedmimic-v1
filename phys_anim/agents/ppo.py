@@ -123,8 +123,8 @@ class PPO:
         self.extra_obs_inputs = self.config.extra_inputs
         if self.extra_obs_inputs is not None:
             keys = list(self.extra_obs_inputs.keys())
-            for key in keys:
-                val = self.extra_obs_inputs[key]
+            for key in keys:                                # terrain : shape = 256
+                val = self.extra_obs_inputs[key]            # mimic_target_poses : 6495 = (1 + 24 * 18) * 15
                 if not val.get("retrieve_from_env", True):
                     del self.extra_obs_inputs[key]
                     continue
@@ -148,14 +148,14 @@ class PPO:
                 self.num_envs, dtype=torch.long, device=self.device
             )
 
-        # Obs deliberately not on here, since its updated before env step
+        # Obs 没有包含在这里，因为它会在环境步进前被更新
         self.actor_state_to_experience_buffer_list = [
-            "mus",
-            "sigmas",
-            "actions",
-            "neglogp",
-            "rewards",
-            "dones",
+            "mus",  # 动作分布的均值
+            "sigmas",  # 动作分布的标准差
+            "actions",  # 从分布中采样的动作
+            "neglogp",  # 所采取动作的负对数概率
+            "rewards",  # 从环境中获得的奖励
+            "dones",  # 标记回合是否结束
         ]
 
         self.current_lengths = torch.zeros(
@@ -320,7 +320,7 @@ class PPO:
                 exit(0)
 
         self.time_report.end_timer("algorithm")
-        self.time_report.report()
+        # self.time_report.report()
         self.save()
         self.fabric.call("on_fit_end", self)
 

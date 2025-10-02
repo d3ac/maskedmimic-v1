@@ -60,7 +60,7 @@ class NormObsBase(nn.Module):
             self.running_obs_norm = RunningMeanStd(
                 shape=self.get_norm_shape(),
                 device="cpu",
-                clamp_value=self.config.obs_clamp_value,
+                clamp_value=self.config.obs_clamp_value,  # 对观测值进行截断或限制，在强化学习训练的早期防止数值不稳定，避免对均值和方差的过度影响
             )
 
     def get_norm_shape(self):

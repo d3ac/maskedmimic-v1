@@ -62,11 +62,11 @@ class GymBaseInterface(BaseInterface, Humanoid):  # type: ignore[misc]
         self.gym = gymapi.acquire_gym()
 
         # optimization flags for pytorch JIT
-        torch._C._jit_set_profiling_mode(False)
-        torch._C._jit_set_profiling_executor(False)
+        torch._C._jit_set_profiling_mode(False)      # 关闭PyTorch JIT的profiling模式，加快启动速度，适用于调试或非性能关键场景
+        torch._C._jit_set_profiling_executor(False)  # 关闭JIT的profiling执行器，避免JIT根据运行时信息动态优化，提升稳定性
 
         # create envs, sim and viewer
-        self.create_sim()
+        self.create_sim() # 仿真初始化的最后一步必要操作
         self.gym.prepare_sim(self.sim)
         # todo: read from config
         self.enable_viewer_sync = True

@@ -12,11 +12,10 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": [
-                "+exp=full_body_tracker",
-                "+robot=smpl",
-                "+backbone=isaacgym",
-                "motion_file=data/hml3d/train_val.pt",
-                "algo.config.batch_size=8192"
+                "data/yaml_files/temp.yaml",
+                "/data1/yueyi/data/amass",
+                "temp.pt",
+                "--create-text-embeddings"
             ]
         }
     ]

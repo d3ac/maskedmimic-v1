@@ -55,7 +55,7 @@ class ExperienceBuffer(DeviceDtypeModuleMixin):
     def register_key(self, key: str, shape=(), dtype=torch.float):
         assert not hasattr(self, key), key
         buffer = torch.zeros(
-            (self.num_steps, self.num_envs) + shape, dtype=dtype, device=self.device
+            (self.num_steps, self.num_envs) + shape, dtype=dtype, device=self.device # 维度就是 (num_steps , num_envs , shape)
         )
         self.register_buffer(key, buffer, persistent=False)
         self.store_dict[key] = 0

@@ -41,24 +41,46 @@ class BaseInterface(object):
 
         self.num_envs = config.num_envs
 
-        self.control_freq_inv = config.simulator.sim.control_freq_inv
+        # 控制频率的倒数，表示每进行一次高层控制需要多少个物理仿真步（即每隔多少步执行一次控制）
+        self.control_freq_inv = config.simulator.sim.control_freq_inv 
 
     def get_obs_size(self):
+        """获取观测空间的大小。"""
         raise NotImplementedError
 
     def on_environment_ready(self):
+        """当环境完全设置好后调用的回调函数。"""
         pass
 
     def step(self, actions):
+        """
+        在环境中执行一个时间步。
+
+        Args:
+            actions: 要应用的动作。
+        """
         raise NotImplementedError
 
     def pre_physics_step(self, actions):
+        """
+        在物理模拟之前执行的步骤，通常用于应用动作。
+
+        Args:
+            actions: 要应用的动作。
+        """
         raise NotImplementedError
 
     def reset(self, env_ids=None):
+        """
+        重置环境中的部分或全部智能体。
+
+        Args:
+            env_ids: 需要重置的环境ID列表。如果为None, 则重置所有环境。
+        """
         raise NotImplementedError
 
     def physics_step(self):
+        """执行一个完整的物理模拟步骤，可能包含多个子步骤。"""
         if self.isaac_pd:
             self.apply_pd_control()
         for i in range(self.control_freq_inv):
@@ -67,13 +89,22 @@ class BaseInterface(object):
             self.simulate()
 
     def simulate(self):
+        """执行单步物理模拟。"""
         raise NotImplementedError
 
     def post_physics_step(self):
+        """在物理模拟之后执行的步骤，用于计算奖励、观测和重置。"""
         raise NotImplementedError
 
     def on_epoch_end(self, current_epoch: int):
+        """
+        在每个训练周期结束时调用的回调函数。
+
+        Args:
+            current_epoch: 当前的周期数。
+        """
         pass
 
     def close(self):
+        """清理资源并关闭环境。"""
         raise NotImplementedError

@@ -55,10 +55,10 @@ class BaseMimic(MimicHumanoid):  # type: ignore[misc]
     def __init__(self, config, device: torch.device):
         super().__init__(config, device)
 
-        self.reward_joint_weights = self.get_reward_joint_weights()
+        self.reward_joint_weights = self.get_reward_joint_weights() # 评分标准
 
         # Used by the tl in eval.
-        self.disable_reset_track = False
+        self.disable_reset_track = False         # 在eval的时候不要达到了self.config.mimic_reset_track.steps_max就reset
 
         # This mask is used to filter out motions we can't start from due to missing scenes.
         self.motion_sampling_mask = torch.zeros(
@@ -73,8 +73,8 @@ class BaseMimic(MimicHumanoid):  # type: ignore[misc]
             self.mimic_target_poses = torch.zeros(
                 self.num_envs,
                 self.config.mimic_target_pose.num_future_steps
-                * self.config.mimic_target_pose.num_obs_per_target_pose,
-                dtype=torch.float,
+                * self.config.mimic_target_pose.num_obs_per_target_pose, # num_obs_per_joint（18） * 24 + 1 （时间信息）
+                dtype=torch.float,                                       # 3 (位置) + 6 (旋转) + 3 (线速度) + 3 (角速度) + 3 (关节姿态) = 18
                 device=self.device,
             )
 
@@ -95,11 +95,11 @@ class BaseMimic(MimicHumanoid):  # type: ignore[misc]
             self.setup_dynamic_sampling()
 
         # Sampling vectors
-        self.init_start_probs = (
+        self.init_start_probs = (       # 控制环境重置时从动作序列开头开始的概率，确保智能体有机会从动作序列的开始学习完整的动作模式
             torch.ones(self.num_envs, dtype=torch.float, device=self.device)
             * self.config.mimic_motion_sampling.init_start_prob
         )
-        self.init_random_probs = (
+        self.init_random_probs = (      # 控制环境重置时从动作序列随机位置开始的概率，增加训练的多样性，让智能体学会从动作序列的任意时间点开始执行动作
             torch.ones(self.num_envs, dtype=torch.float, device=self.device)
             * self.config.mimic_motion_sampling.init_random_prob
         )
@@ -163,7 +163,7 @@ class BaseMimic(MimicHumanoid):  # type: ignore[misc]
         bucket_motion_ids_list = []
         bucket_starts_list = []
         bucket_lengths_list = []
-        bucket_width = self.config.mimic_dynamic_sampling.bucket_width
+        bucket_width = self.config.mimic_dynamic_sampling.bucket_width # 2s的宽度
 
         start_times = self.motion_lib.state.motion_timings[:, 0].tolist()
         end_times = self.motion_lib.state.motion_timings[:, 1].tolist()
@@ -188,25 +188,25 @@ class BaseMimic(MimicHumanoid):  # type: ignore[misc]
             num_buckets_list, dtype=torch.long, device=self.device
         )
 
-        rolled = num_buckets.roll(1)
-        rolled[0] = 0
-        self.bucket_offsets = rolled.cumsum(0)
+        rolled = num_buckets.roll(1)  # bucket_offsets 用于记录每个 motion 的 bucket 在所有 bucket 中的起始索引。例如：假设 num_buckets = [3, 2, 4]，则 bucket_offsets = [0, 3, 5]，
+        rolled[0] = 0 # 表示第0个motion的bucket从第0个bucket开始（0），第1个motion的bucket从第3个bucket开始（3），第2个motion的bucket从第5个bucket开始（5）。
+        self.bucket_offsets = rolled.cumsum(0)  # 将num_buckets整体向后滚动一位，为cumsum做准备，这样可以通过 motion_id 快速定位其对应的 bucket 在全局 bucket 列表中的起始位置。第一个motion的起始位置为0，计算每个motion的bucket起始索引
 
         total_num_buckets = sum(num_buckets_list)
 
-        self.bucket_scores = torch.zeros(
+        self.bucket_scores = torch.zeros(   # scores: 在这个bucket上的表现分数
             total_num_buckets, dtype=torch.float, device=self.device
         )
-        self.bucket_frames_spent = torch.zeros(
+        self.bucket_frames_spent = torch.zeros( # frames_spent: 在这个bucket上训练了多少帧
             total_num_buckets, dtype=torch.long, device=self.device
         )
 
-        # Minimal score equivalent to 1/total_num_buckets.
-        # If a single bucket always fails and the rest always succeed,
-        # there's an equal chance to sample the bad bucket, or any of the good buckets.
-        # Should combine with periodic refresh of the weights to avoid getting stuck.
-        # Typically, SLURM jobs are restarted every few hours, which takes care of this.
-        self._min_bucket_weight = torch.ones(
+        # 最小分数等价于 1/total_num_buckets。
+        # 如果某一个 bucket 总是失败，其余 bucket 总是成功，
+        # 那么采样到这个坏 bucket 或任意一个好 bucket 的概率是相等的。
+        # 应该结合定期刷新权重，避免陷入局部最优。
+        # 通常，SLURM 任务每隔几小时会重启，这也能解决这个问题。
+        self._min_bucket_weight = torch.ones(  # weights: 采样这个bucket的权重（越难的bucket权重越高）
             total_num_buckets, dtype=torch.float, device=self.device
         ) * (
             self.config.mimic_dynamic_sampling.min_bucket_weight
@@ -234,54 +234,54 @@ class BaseMimic(MimicHumanoid):  # type: ignore[misc]
 
     def dynamic_sample(self, n: int):
         """
-        Dynamically sample motion sequences based on their difficulty.
-
-        This method implements a weighted sampling strategy to select motion sequences,
-        prioritizing more challenging motions. It uses a bucket system where each bucket
-        represents a portion of a motion sequence.
-
-        Args:
-            n (int): The number of motion sequences to sample.
-
-        Returns:
-            Tuple[Tensor, Tensor, Tensor]: A tuple containing:
-                - motion_ids (Tensor): The IDs of the sampled motions.
-                - motion_times (Tensor): The start times for each sampled motion.
-                - new_scenes (Tensor): The scene IDs associated with each sampled motion.
-
-        The method works as follows:
-        1. Initialize tensors to store the sampling results.
-        2. Prepare the sampling weights, ensuring a minimum weight for each bucket.
-        3. Sample buckets using the prepared weights.
-        4. For each sampled bucket, determine the corresponding motion ID and time.
-        5. Sample appropriate scenes for the selected motions.
-        6. If sampling fails (e.g., no valid scenes), fall back to a simpler sampling method.
-        7. Update the scene usage if using a scene library.
-        8. Repeat until the requested number of samples is obtained.
-
-        Note:
-        - The method uses the current state of bucket weights, which are updated elsewhere
-          based on the success/failure of previous attempts at these motions.
-        - It includes logic to handle cases where some buckets have never been visited,
-          ensuring exploration of new motion segments.
+        根据难度动态采样动作序列。
+        
+        该方法实现了一个加权采样策略来选择动作序列，
+        优先选择更具挑战性的动作。它使用桶系统，其中每个桶
+        代表动作序列的一部分。
+        
+        参数:
+            n (int): 要采样的动作序列数量。
+            
+        返回:
+            Tuple[Tensor, Tensor, Tensor]: 包含以下内容的元组：
+                - motion_ids (Tensor): 采样的动作ID
+                - motion_times (Tensor): 每个采样动作的开始时间
+                - new_scenes (Tensor): 与每个采样动作相关的场景ID
+                
+        方法工作流程:
+        1. 初始化张量来存储采样结果
+        2. 准备采样权重，确保每个桶的最小权重
+        3. 使用准备好的权重采样桶
+        4. 对于每个采样的桶，确定相应的动作ID和时间
+        5. 为选定的动作采样合适的场景
+        6. 如果采样失败（例如，没有有效场景），回退到更简单的采样方法
+        7. 如果使用场景库，更新场景使用情况
+        8. 重复直到获得所需数量的样本
+        
+        注意:
+        - 该方法使用桶权重的当前状态，这些权重在其他地方
+        根据这些动作之前尝试的成功/失败而更新
+        - 它包含处理某些桶从未被访问过的情况的逻辑，
+        确保探索新的动作片段
         """
         # Initialize tensors to store the sampling results
         new_scenes = torch.zeros(n, dtype=torch.long, device=self.device)
         motion_ids = torch.zeros(n, dtype=torch.long, device=self.device)
         motion_times = torch.zeros(n, dtype=torch.float, device=self.device)
 
-        # Prepare the sampling weights, ensuring a minimum weight for each bucket
+        # 准备采样权重，确保每个桶都有最小权重
         weights = self.bucket_weights.clone().clamp(min=self._min_bucket_weight)
         if (self.bucket_weights == 0).any():
-            # Bucket weights are always >= 0 for any visited bucket.
-            # If a bucket has never been visited, it should be sampled with equal probability.
-            # This optimization is for SLURM-based autoresume, where the job is restarted every few hours.
-            # It ensures we quickly sample from unvisited buckets and figure out what are the challenging motions.
+            # 对于任何访问过的桶，桶权重始终 >= 0。
+            # 如果一个桶从未被访问过，则应以相等的概率进行采样。
+            # 此优化适用于基于 SLURM 的自动恢复，其中作业每隔几小时重新启动一次。
+            # 它确保我们能快速从未访问过的桶中采样，并找出具有挑战性的动作。
             weights[self.bucket_weights == 0] = 1.0
             weights[self.bucket_weights != 0] = 0.0
             norm_weight = weights
         else:
-            # Normalize weights and clamp to a maximum value if specified
+            # 如果指定了最大值，则对权重进行归一化并限制在该值范围内
             min_weight = weights.min()
             norm_weight = weights / min_weight
             if self.config.mimic_dynamic_sampling.dynamic_weight_max is not None:
@@ -296,7 +296,7 @@ class BaseMimic(MimicHumanoid):  # type: ignore[misc]
                 print(
                     f"Dynamic sampling failed after {valid_samples} valid sampled motions. Resort to sample_valid_motions for the rest."
                 )
-                # No valid buckets, resort to sample_valid_motions
+                # 没有有效的桶，转而使用 sample_valid_motions
                 fallback_motion_ids, fallback_scenes = self.sample_valid_motions(
                     remaining
                 )
@@ -308,21 +308,21 @@ class BaseMimic(MimicHumanoid):  # type: ignore[misc]
                 new_scenes[valid_samples:] = fallback_scenes
                 valid_samples += remaining
             else:
-                # Sample buckets using the prepared weights
-                chosen_bucket_indices = torch.multinomial(
+                # 使用准备好的权重对桶进行采样
+                chosen_bucket_indices = torch.multinomial(                 # 在所有的bucket中采样4096个
                     norm_weight, num_samples=remaining, replacement=True
                 )
                 sampled_motion_ids = self.bucket_motion_ids[chosen_bucket_indices]
                 bucket_starts = self.bucket_starts[chosen_bucket_indices]
                 bucket_lengths = self.bucket_lengths[chosen_bucket_indices]
 
-                # Determine the corresponding motion ID and time for each sampled bucket
+                # 随机采样每个桶的开始时间，也就是随机开始时间
                 sampled_motion_times = (
                     torch.rand(remaining, device=self.device) * bucket_lengths
                     + bucket_starts
                 )
 
-                # Sample scene ids for the motions
+                # 为动作采样场景 ID
                 sampled_scenes, valid_mask = self.sample_scene_ids(sampled_motion_ids)
 
                 if valid_mask.any():
@@ -338,11 +338,11 @@ class BaseMimic(MimicHumanoid):  # type: ignore[misc]
                     )
                     valid_samples += valid_count
 
-                    # Mark valid scenes as in use
+                    # 将有效场景标记为正在使用
                     if self.scene_lib is not None:
                         self.scene_lib.mark_scene_in_use(sampled_scenes[valid_mask])
 
-                # Iterate through invalid motion IDs and mark their corresponding buckets
+                # 遍历无效的动作 ID 并标记其对应的桶
                 if ~valid_mask.any():
                     for invalid_motion_id in sampled_motion_ids[~valid_mask]:
                         invalid_buckets = self.bucket_motion_ids == invalid_motion_id
@@ -471,86 +471,113 @@ class BaseMimic(MimicHumanoid):  # type: ignore[misc]
 
     def reset_track(self, env_ids, new_motion_ids=None):
         """
-        Reset the motion and scene for a set of environments.
-        This method handles the process of resetting the motion and scene for a specified set of environments.
-        It ensures that the reset process is correctly handled based on the current configuration.
+        重置指定环境的动作和场景
+        该方法处理指定环境集合的动作和场景重置过程。
+        它确保重置过程根据当前配置正确处理。
 
         Args:
-            env_ids (Tensor): Indices of the environments to reset.
-            new_motion_ids (Tensor, optional): New motion IDs for the reset environments.
+            env_ids (Tensor): 需要重置的环境索引
+            new_motion_ids (Tensor, optional): 重置环境的新动作ID
         Returns:
-            Tuple[Tensor, Tensor]: New motion IDs and times for the reset environments.
+            Tuple[Tensor, Tensor]: 重置环境的新动作ID和时间
         """
+        # ---------------------------- 检查是否禁用轨迹重置 ----------------------------
         if self.disable_reset_track:
             return
 
-        # All reset envs will first relinquish their scene, then try to get a new one.
+        # ---------------------------- 场景资源管理 ----------------------------
+        # 所有重置的环境首先释放其场景，然后尝试获取新场景
         if self.scene_lib is not None:
             self.scene_lib.mark_scene_not_in_use(self.scene_ids[env_ids])
 
-        if self.config.mimic_fixed_motion_per_env:
+        # ---------------------------- 动作ID采样策略 ----------------------------
+        if self.config.mimic_fixed_motion_per_env:     # (暂时没用)
+            # 固定动作策略：每个环境绑定固定的动作
             motion_index_offset = self.env.config.motion_index_offset
             if motion_index_offset is None:
                 motion_index_offset = 0
+            # 使用取模运算确保动作ID在有效范围内
             new_motion_ids = torch.fmod(
                 env_ids + motion_index_offset,
                 self.motion_lib.num_sub_motions(),
             )
+            # 获取动作的起始时间
             new_times = self.motion_lib.state.motion_timings[new_motion_ids, 0]
 
+            # 为每个动作采样对应的场景ID
             new_scenes, valid_mask = self.sample_scene_ids(new_motion_ids)
             assert (
                 valid_mask.all()
-            ), f"Fixed motion per env. Motion ids {new_motion_ids[~valid_mask]} lack a valid scene."
+            ), f"固定动作模式下，动作ID {new_motion_ids[~valid_mask]} 缺少有效场景。"
 
         elif self.config.mimic_dynamic_sampling.enabled and new_motion_ids is None:
+            # 动态采样策略：根据配置动态选择动作、时间和场景
             new_motion_ids, new_times, new_scenes = self.dynamic_sample(len(env_ids))
         else:
+            # 默认采样策略：随机或指定动作采样
             new_motion_ids, new_scenes = self.sample_valid_motions(
                 len(env_ids), new_motion_ids
             )
 
+            # 为采样的动作随机选择时间点
             new_times = self.motion_lib.sample_time(
                 new_motion_ids,
                 truncate_time=self.dt,
             )
 
+        # ---------------------------- 初始化时间调整 ----------------------------
+        # 根据配置概率决定是否从动作起始时间开始
         if self.config.mimic_motion_sampling.init_start_prob > 0:
+            # 以一定概率选择从动作开始时间初始化
             init_start = torch.bernoulli(self.init_start_probs[: len(env_ids)])
             new_times = torch.where(
                 init_start == 1,
-                self.motion_lib.state.motion_timings[new_motion_ids, 0],
-                new_times,
+                self.motion_lib.state.motion_timings[new_motion_ids, 0],  # 使用动作起始时间
+                new_times,  # 保持原有时间
             )
 
+        # 根据配置概率决定是否随机初始化时间
         if self.config.mimic_motion_sampling.init_random_prob > 0:
+            # 以一定概率选择随机时间初始化
             init_random = torch.bernoulli(self.init_random_probs[: len(env_ids)])
             new_times = torch.where(
                 init_random == 1,
-                self.motion_lib.sample_time(
+                self.motion_lib.sample_time(  # 重新随机采样时间
                     new_motion_ids,
                     truncate_time=self.dt,
                 ),
-                new_times,
+                new_times,  # 保持原有时间
             )
 
+        # ---------------------------- 状态更新 ----------------------------
+        # 更新环境的动作ID、时间和场景ID
         self.motion_ids[env_ids] = new_motion_ids
         self.motion_times[env_ids] = new_times
         self.scene_ids[env_ids] = new_scenes
 
+        # ---------------------------- 场景物体映射更新 ----------------------------
+        # 更新环境ID到物体ID的映射关系
         if self.config.scene_lib is not None:
             for env_id, scene_id in zip(env_ids, new_scenes):
+                # 首先清空该环境的物体映射
                 self.env_id_to_object_ids[env_id, :] = -1
+                # 找到属于当前场景的所有物体
                 object_mask = self.object_id_to_scene_id == scene_id
                 if object_mask.any():
                     object_ids = torch.where(object_mask)[0]
+                    # 建立环境到物体的映射关系
                     self.env_id_to_object_ids[env_id, : len(object_ids)] = object_ids
 
+        # ---------------------------- 重置步数统计 ----------------------------
+        # 重置轨迹步数计数器
         self.reset_track_steps.reset_steps(env_ids)
 
+        # ---------------------------- 视觉效果更新 ----------------------------
+        # 如果不是无头模式，随机化环境颜色用于可视化区分
         if not self.config.headless:
             self.randomize_color(env_ids)
 
+        # 返回新的动作ID和时间
         return self.motion_ids[env_ids], self.motion_times[env_ids]
 
     def reset_actors(self, env_ids):
@@ -1119,20 +1146,16 @@ class BaseMimic(MimicHumanoid):  # type: ignore[misc]
 
     def get_reward_joint_weights(self):
         """
-        Calculate the weights for each joint in the reward function.
+        计算奖励函数中每个关节的权重。
 
-        This method assigns different weights to joints based on their importance
-        in the overall motion. For the SMPLX humanoid model, it gives equal importance
-        to each finger joint within a hand, while other joints maintain their default weight.
+        本方法根据关节在整体动作中的重要性为其分配不同的权重。对于 SMPLX 人形模型，会为每只手内部的每个手指关节分配相等的权重，而其他关节则保持默认权重。
 
-        Returns:
-            torch.Tensor: A tensor of joint weights, with shape (num_bodies,).
+        返回值:
+            torch.Tensor: 关节权重的张量，形状为 (num_bodies,)
 
-        Note:
-            - This method only applies unequal weights for the SMPLX humanoid model.
-            - The weights are used to balance the contribution of different joints
-              in the reward calculation, preventing over-emphasis on joints with many
-              degrees of freedom (like hands).
+        注意:
+            - 只有在 SMPLX 人形模型下才会采用不等权重。
+            - 这些权重用于平衡不同关节在奖励计算中的贡献，防止像手部这样拥有大量自由度的关节对奖励产生过大影响。
         """
         # Return uniform weights if unequal weighting is disabled or not using SMPLX model
         if (

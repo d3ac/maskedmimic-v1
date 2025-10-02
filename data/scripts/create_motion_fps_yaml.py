@@ -1,31 +1,3 @@
-# Copyright (c) 2018-2022, NVIDIA Corporation
-# All rights reserved.
-#
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
-#
-# 1. Redistributions of source code must retain the above copyright notice, this
-#    list of conditions and the following disclaimer.
-#
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-#    this list of conditions and the following disclaimer in the documentation
-#    and/or other materials provided with the distribution.
-#
-# 3. Neither the name of the copyright holder nor the names of its
-#    contributors may be used to endorse or promote products derived from
-#    this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
 import os
 from pathlib import Path
 from typing import Optional
@@ -41,33 +13,45 @@ def main(
     amass_fps_file: Optional[Path] = None,
     output_path: Optional[Path] = None,
 ):
+    """
+    递归扫描指定的运动数据目录，提取每个动作的帧率，并将结果保存为 YAML 文件。
+
+    Args:
+        main_motion_dir (Path): 包含运动数据 (.npz) 文件的根目录。
+        humanoid_type (str, optional): 人体模型类型，'smpl' 或 'smplx'。默认为 'smpl'。
+                                    这会影响帧率的提取方式。
+        amass_fps_file (Optional[Path], optional): 包含 AMASS 数据集预计算帧率的 YAML 文件路径。
+                                                   当 humanoid_type 为 'smplx' 时是必需的。默认为 None。
+        output_path (Optional[Path], optional): 输出 YAML 文件的保存目录。默认为当前工作目录。
+    """
     if humanoid_type == "smplx":
         assert (
             amass_fps_file is not None
         ), "Please provide the amass_fps_file since amass-x fps is wrong."
         amass_fps = yaml.load(open(amass_fps_file, "r"), Loader=yaml.SafeLoader)
 
-    # iterate over folder and all sub folders recursively.
-    # load each file.
-    # store the full filename in a dictionary.
-    # store the entry "motion_fps" in the dictionary.
-    # save the dictionary to a yaml file.
+    # 初始化一个字典来存储文件名和对应的帧率
     motion_fps_dict = {}
+    # 递归遍历目录及所有子目录
     for root, dirs, files in os.walk(main_motion_dir):
-        # Ignore folders with name "-retarget" or "-smpl" or "-smplx"
+        # 忽略包含 "-retarget"、"-smpl" 或 "-smplx" 的文件夹
         if "-retarget" in root or "-smpl" in root or "-smplx" in root:
             continue
         for file in files:
+            # 只处理 .npz 文件，并排除特定的文件名（如 shape.npz）
             if (
                 file.endswith(".npz")
                 and file != "shape.npz"
                 and "stagei.npz" not in file
             ):
-                # remove the main_motion_dir from the root
+                # --- 文件路径和名称的规范化处理 ---
+                # 从根路径中移除主运动目录部分，得到相对路径
                 save_root = root.replace(str(main_motion_dir), "")
-                # remove any leading slashes
+                # 移除路径开头的任何斜杠
                 save_root = save_root.lstrip("/")
 
+                # 重命名文件：将 .npz 替换为 .npy，并将特殊字符替换为下划线
+                # 这是为了创建一个统一的、将用作字典键的标识符
                 file_rename = (
                     save_root
                     + "/"
@@ -78,7 +62,9 @@ def main(
                     .replace(")", "_")
                 )
 
+                # --- 根据人体模型类型提取帧率 ---
                 if humanoid_type == "smplx":
+                    # 对于 smplx 类型，需要特殊处理文件名以匹配 AMASS 数据集的帧率文件
                     amass_filename = file_rename.replace("_stageii", "_poses")
                     amass_filename = amass_filename.replace("SSM/", "SSM_synced/")
                     amass_filename = amass_filename.replace("HMD05/", "MPI_HDM05/")
@@ -95,12 +81,15 @@ def main(
                         "BMLrub/", "BioMotionLab_NTroje/"
                     )
 
+                    # 尝试从预加载的 amass_fps 文件中获取帧率
                     if amass_filename in amass_fps:
                         framerate = amass_fps[amass_filename]
                     else:
+                        # 如果在 amass_fps 文件中找不到，则从 .npz 文件中加载或使用启发式规则
                         motion_data = dict(
                             np.load(open(root + "/" + file, "rb"), allow_pickle=True)
                         )
+                        # 根据文件名中的关键字或文件内的数据来确定帧率
                         if "TotalCapture" in file_rename or "SSM" in file_rename:
                             framerate = 60
                         elif "KIT" in file_rename:
@@ -110,6 +99,7 @@ def main(
                         else:
                             raise Exception(f"{file_rename} has no framerate")
                 else:
+                    # 对于 smpl 类型，直接从 .npz 文件中加载帧率
                     motion_data = dict(
                         np.load(open(root + "/" + file, "rb"), allow_pickle=True)
                     )
@@ -120,8 +110,10 @@ def main(
 
                 motion_fps_dict[file_rename] = int(framerate)
 
+    # --- 保存结果 ---
     if output_path is None:
         output_path = Path.cwd()
+    # 将最终的字典保存到 YAML 文件
     with open(output_path / f"motion_fps_{humanoid_type}.yaml", "w") as f:
         yaml.dump(motion_fps_dict, f)
 

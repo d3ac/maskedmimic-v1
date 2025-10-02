@@ -34,6 +34,12 @@ from torch import Tensor, nn
 
 
 class RunningMeanStd(nn.Module):
+    """
+    计算数据流的运行平均值和标准差。
+    使用Welford的在线算法或其并行变体来高效地更新均值和方差。
+    https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
+    """
+
     def __init__(
         self,
         epsilon: int = 1,
@@ -42,10 +48,12 @@ class RunningMeanStd(nn.Module):
         clamp_value: Optional[float] = None,
     ):
         """
-        Calulates the running mean and std of a data stream
+        初始化运行平均值和标准差的计算器。
         https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
-        :param epsilon: helps with arithmetic issues
-        :param shape: the shape of the data stream's output
+        :param epsilon: 一个小的数值，用于防止除以零的算术问题，也用于初始化计数器。
+        :param shape: 数据流输出的形状。
+        :param device: 计算所在的设备 (例如, "cuda:0" 或 "cpu")。
+        :param clamp_value: 如果提供，归一化后的值将被限制在 [-clamp_value, clamp_value] 范围内。
         """
         super().__init__()
         self.mean = nn.Parameter(
@@ -62,6 +70,12 @@ class RunningMeanStd(nn.Module):
 
     @torch.no_grad()
     def update(self, arr: torch.tensor) -> None:
+        """
+        根据新的一批数据更新运行平均值和标准差。
+        它首先计算这批数据的均值和方差，然后调用 update_from_moments。
+
+        :param arr: 新的数据批次，一个torch张量。
+        """
         batch_mean = torch.mean(arr, dim=0)
         batch_var = torch.var(arr, dim=0, unbiased=False)
         batch_count = arr.shape[0]
@@ -71,6 +85,14 @@ class RunningMeanStd(nn.Module):
     def update_from_moments(
         self, batch_mean: torch.tensor, batch_var: torch.tensor, batch_count: int
     ) -> None:
+        """
+        使用新批次的均值、方差和计数来更新模型的运行统计信息。
+        这实现了并行算法来计算方差，允许高效地合并来自不同批次的统计数据。
+
+        :param batch_mean: 新数据批次的均值。
+        :param batch_var: 新数据批次的方差 (使用n进行归一化，即无偏估计为False)。
+        :param batch_count: 新数据批次中的样本数量。
+        """
         delta = batch_mean - self.mean
         new_count = self.count + batch_count
 
@@ -92,12 +114,26 @@ class RunningMeanStd(nn.Module):
         self.count.fill_(new_count)
 
     def maybe_clamp(self, x: Tensor):
+        """
+        如果设置了 clamp_value，则将输入张量的值限制在 [-clamp_value, clamp_value] 范围内。
+
+        :param x: 输入张量。
+        :return: 如果 clamp_value 不为 None，则返回被裁剪的张量；否则返回原始张量。
+        """
         if self.clamp_value is None:
             return x
         else:
             return torch.clamp(x, -self.clamp_value, self.clamp_value)
 
     def normalize(self, arr: torch.tensor, un_norm=False) -> torch.tensor:
+        """
+        使用运行平均值和标准差对输入张量进行归一化或反归一化。
+
+        :param arr: 要处理的输入张量。
+        :param un_norm: 如果为 False (默认)，则对张量进行归一化。
+                        如果为 True，则对张量进行反归一化。
+        :return: 处理后的张量。
+        """
         if not un_norm:
             result = (arr - self.mean) / torch.sqrt(self.var + 1e-5)
             result = self.maybe_clamp(result)

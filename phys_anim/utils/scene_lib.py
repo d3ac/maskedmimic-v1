@@ -466,18 +466,18 @@ class SceneLib:
         self, object_id: torch.Tensor, time: torch.Tensor
     ) -> ObjectState:
         """
-        Get the pose of an object at a specific time.
+        获取指定时间点物体的位姿。
 
-        Args:
-            object_id (torch.Tensor): The ID of the object. Shape: [B]
-            time (torch.Tensor): The time at which to get the object's pose. Shape: [B]
+        参数:
+            object_id (torch.Tensor): 物体的ID。形状: [B]
+            time (torch.Tensor): 获取物体位姿的时间。形状: [B]
 
-        Returns:
-            ObjectState: A ObjectState object containing the object's translation, rotation, and whether it's static.
+        返回:
+            ObjectState: 一个包含物体平移、旋转以及是否为静态的ObjectState对象。
 
-        Note:
-            If the object is static (motion_length == -1), it will return the initial pose.
-            For dynamic objects, it interpolates between two frames based on the given time.
+        注意:
+            如果物体是静态的（motion_length == -1），将返回初始位姿。
+            对于动态物体，会根据给定时间在两个帧之间进行插值。
         """
         motion_length = self.motion_lengths[object_id]
         motion_start = self.motion_starts[object_id]
@@ -517,16 +517,16 @@ class SceneLib:
         dt: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Calculate frame indices and blend factor for interpolation.
+        计算插值所需的帧索引和混合因子。
 
-        Args:
-            time (torch.Tensor): Current time.
-            length (torch.Tensor): Length of the motion sequence in seconds.
-            num_frames (torch.Tensor): Number of frames in the motion sequence.
-            dt (torch.Tensor): Time step between frames.
+        参数:
+            time (torch.Tensor): 当前时间。
+            length (torch.Tensor): 动作序列的总时长（秒）。
+            num_frames (torch.Tensor): 动作序列的帧数。
+            dt (torch.Tensor): 帧之间的时间间隔。
 
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: Frame index 0, frame index 1, and blend factor.
+        返回:
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: 帧索引0、帧索引1，以及混合因子。
         """
         phase = time / length
         phase = torch.clip(phase, 0.0, 1.0)

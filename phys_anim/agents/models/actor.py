@@ -77,12 +77,12 @@ class PPO_Actor(nn.Module):
     def get_extracted_features(self, input_dict):
         raise NotImplementedError()
 
-    @staticmethod
-    def neglogp(x, mean, std, logstd):
-        return (
-            0.5 * (((x - mean) / std) ** 2).sum(dim=-1)
-            + 0.5 * np.log(2.0 * np.pi) * x.size()[-1]
-            + logstd.sum(dim=-1)
+    @staticmethod                                          # p(x) = (2π)^(-k/2) * |Σ|^(-1/2) * exp(-1/2 * (x-μ)ᵀ * Σ⁻¹ * (x-μ))
+    def neglogp(x, mean, std, logstd):                     # log p(x) = -k/2 * log(2π) - 1/2 * log|Σ| - 1/2 * (x-μ)ᵀ * Σ⁻¹ * (x-μ)    
+        return (                                           # -log p(x) = k/2 * log(2π) + 1/2 * log|Σ| + 1/2 * (x-μ)ᵀ * Σ⁻¹ * (x-μ)
+            0.5 * (((x - mean) / std) ** 2).sum(dim=-1)    # 1/2 * (x-μ)ᵀ * Σ⁻¹ * (x-μ)
+            + 0.5 * np.log(2.0 * np.pi) * x.size()[-1]     # k/2 * log(2π)
+            + logstd.sum(dim=-1)                           # 1/2 * log|Σ|
         )
 
     def logstd_tick(self, current_epoch: int):

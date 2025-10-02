@@ -63,21 +63,21 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
             self.dof_offsets[-1] == self.num_dof
         ), f"Mismatch in num DOFs {self.num_dof} and {self.dof_offsets[-1]}"
 
-        self.dt: float = self.config.simulator.sim.control_freq_inv * self.sim_params.dt
+        self.dt: float = self.config.simulator.sim.control_freq_inv * self.sim_params.dt # 60Hz 仿真频率，dt是控制频率 30Hz
 
         # Refresh tensors BEFORE we acquire them https://forums.developer.nvidia.com/t/isaacgym-preview-4-actor-root-state-returns-nans-with-isaacgymenvs-style-task/223738/4
-        self.gym.refresh_dof_state_tensor(self.sim)
-        self.gym.refresh_actor_root_state_tensor(self.sim)
-        self.gym.refresh_rigid_body_state_tensor(self.sim)
-        self.gym.refresh_net_contact_force_tensor(self.sim)
-        self.gym.refresh_force_sensor_tensor(self.sim)
+        self.gym.refresh_dof_state_tensor(self.sim)                                  # 1
+        self.gym.refresh_actor_root_state_tensor(self.sim)                           # 5
+        self.gym.refresh_rigid_body_state_tensor(self.sim)                           # 3
+        self.gym.refresh_net_contact_force_tensor(self.sim)                          # 2
+        self.gym.refresh_force_sensor_tensor(self.sim)                               # 4
 
         # get gym GPU state tensors
-        actor_root_state = self.gym.acquire_actor_root_state_tensor(self.sim)
-        dof_state_tensor = self.gym.acquire_dof_state_tensor(self.sim)
-        force_tensor = self.gym.acquire_force_sensor_tensor(self.sim)
-        rigid_body_state = self.gym.acquire_rigid_body_state_tensor(self.sim)
-        contact_force_tensor = self.gym.acquire_net_contact_force_tensor(self.sim)
+        actor_root_state = self.gym.acquire_actor_root_state_tensor(self.sim)        # 5
+        dof_state_tensor = self.gym.acquire_dof_state_tensor(self.sim)               # 1
+        force_tensor = self.gym.acquire_force_sensor_tensor(self.sim)                # 4
+        rigid_body_state = self.gym.acquire_rigid_body_state_tensor(self.sim)        # 3
+        contact_force_tensor = self.gym.acquire_net_contact_force_tensor(self.sim)   # 2
 
         dof_force_tensor = self.gym.acquire_dof_force_tensor(self.sim)
         self.dof_force_tensor: Tensor = gymtorch.wrap_tensor(dof_force_tensor).view(
@@ -90,9 +90,9 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
         self.gym.refresh_net_contact_force_tensor(self.sim)
         self.gym.refresh_force_sensor_tensor(self.sim)
 
-        self.root_states: Tensor = gymtorch.wrap_tensor(actor_root_state)
+        self.root_states: Tensor = gymtorch.wrap_tensor(actor_root_state) # (4435, 13) = 4096 + 339
 
-        self.object_root_states = self.root_states[-self.total_num_objects :]
+        self.object_root_states = self.root_states[-self.total_num_objects :] # 因为是最后初始化的object，所以是倒数几个
         self.object_indices = torch_utils.to_torch(
             self.object_indices, dtype=torch.int32, device=self.device
         )
@@ -108,7 +108,7 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                 : -self.total_num_objects
             ].view(self.num_envs, num_actors, actor_root_state.shape[-1])[..., 0, :]
 
-        self.initial_humanoid_root_states = self.humanoid_root_states.clone()
+        self.initial_humanoid_root_states = self.humanoid_root_states.clone() # root_pos, root_rot, root_vel, root_ang_vel
         self.initial_humanoid_root_states[:, 7:13] = 0
 
         self.humanoid_actor_ids = num_actors * torch.arange(
@@ -168,11 +168,11 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
         else:
             self.contact_forces = contact_force_tensor[: -self.total_num_objects].view(
                 self.num_envs, bodies_per_env, 3
-            )[..., : self.num_bodies, :]
+            )[..., : self.num_bodies, :] # (4096, 24, 3) 最后这个取了一下相当于没取
             self.object_contact_forces = contact_force_tensor[-self.total_num_objects :]
 
             self.forces = force_tensor[: -self.total_num_objects].view(
-                self.num_envs, len(self.config.robot.contact_bodies), 6
+                self.num_envs, len(self.config.robot.contact_bodies), 6     #  力 + 力矩
             )
             self.object_forces = force_tensor[-self.total_num_objects :]
 
@@ -185,7 +185,7 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
         )
 
         props = self.gym.get_asset_dof_properties(self.humanoid_asset)
-        self.process_dof_props(props)
+        self.process_dof_props(props) # pd控制不用管
         self.create_legged_robot_tensors()
 
         if not self.headless:
@@ -233,11 +233,11 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
         return sim_params
 
     def create_sim(self):
-        self.up_axis_idx = self.set_sim_params_up_axis(self.sim_params, "z")
+        self.up_axis_idx = self.set_sim_params_up_axis(self.sim_params, "z") # 使用z轴作为向上的轴，在这个轴上有重力
         super().create_sim()
 
-        self.create_ground_plane()
-        self.create_envs(
+        self.create_ground_plane() # 在这里创建地面
+        self.create_envs( # 在这里创建环境，包括加入那些物体进去
             # Force zero spacing. Our terrain and scene_lib class handle spawning and object-humanoid allocations.
             self.num_envs,
             0,
@@ -289,9 +289,9 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
         asset_file = os.path.basename(asset_path)
 
         asset_options = gymapi.AssetOptions()
-        asset_options.angular_damping = 0.01
-        asset_options.max_angular_velocity = 100.0
-        asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
+        asset_options.angular_damping = 0.01 # 角速度阻尼
+        asset_options.max_angular_velocity = 100.0 # 最大角速度
+        asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE # 让关节在其运动范围内自由移动
 
         def set_value_if_not_none(prev_value, new_value):
             return new_value if new_value is not None else prev_value
@@ -331,7 +331,7 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
         self.num_joints = self.gym.get_asset_joint_count(humanoid_asset)
 
         # create force sensors
-        sensor_pose = gymapi.Transform()
+        sensor_pose = gymapi.Transform()  # 定义了一个(0,0,0)的默认变换 
         for contact_body_name in self.config.robot.contact_bodies:
             sensor_options = gymapi.ForceSensorProperties()
             sensor_options.enable_forward_dynamics_forces = False  # for example gravity
@@ -342,7 +342,7 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
             index = self.gym.find_asset_rigid_body_index(
                 humanoid_asset, contact_body_name
             )
-            self.gym.create_asset_force_sensor(
+            self.gym.create_asset_force_sensor(    # 在这里表示sensor放在该刚体的质心/几何中心
                 humanoid_asset, index, sensor_pose, sensor_options
             )
 
@@ -358,6 +358,8 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
         if self.config.scene_lib is not None:
             self.load_object_assets()
 
+        # ----------------------------------------- 添加人形 -----------------------------------------
+
         with Progress() as progress:
             task = progress.add_task(
                 f"[cyan]Creating {self.num_envs} environments...", total=self.num_envs
@@ -369,17 +371,18 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                 self.envs.append(env_ptr)
 
                 progress.update(task, advance=1)
-
+        
+        # ----------------------------------------- 添加物体 -----------------------------------------
         if len(self.object_assets) > 0:
-            env_ptr = self.gym.create_env(self.sim, lower, upper, num_per_row)
-            self.build_object_playground(env_ptr)
+            env_ptr = self.gym.create_env(self.sim, lower, upper, num_per_row) # 在IsaacGym中，env并不是指整个仿真世界，而是指一个独立的仿真单元
+            self.build_object_playground(env_ptr) # 将预定义的场景布局实例化到仿真环境中，并将高度图整合
             self.object_envs.append(env_ptr)
 
-        dof_prop = self.gym.get_actor_dof_properties(
+        dof_prop = self.gym.get_actor_dof_properties(   # 获取人形所有关节的属性
             self.envs[0], self.humanoid_handles[0]
         )
         for j in range(self.num_dof):
-            if dof_prop["lower"][j] > dof_prop["upper"][j]:
+            if dof_prop["lower"][j] > dof_prop["upper"][j]: # 可以360度旋转的关节可能会出现这种情况
                 self.dof_limits_lower.append(dof_prop["upper"][j])
                 self.dof_limits_upper.append(dof_prop["lower"][j])
             else:
@@ -421,8 +424,8 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
 
                     object_asset_options = gymapi.AssetOptions()
                     if object_info.get("vhacd_enabled", False):
-                        object_asset_options.vhacd_params = gymapi.VhacdParams()
-                    for key, value in object_info.object_options.items():
+                        object_asset_options.vhacd_params = gymapi.VhacdParams() # VHACD 凸分解参数
+                    for key, value in object_info.object_options.items(): # -------------------------- 将object_info.object_options中的参数设置到object_asset_options中
                         if type(value) == easydict.EasyDict:
                             if hasattr(object_asset_options, key):
                                 object_asset_sub_options = getattr(
@@ -447,7 +450,7 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                             else:
                                 print(
                                     f"Warning: {key} is not a valid option for object asset"
-                                )
+                                )                                        # --------------------------
                     # Load Asset
                     object_asset = self.gym.load_asset(
                         self.sim,
@@ -465,7 +468,7 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                     sensor_options.enable_constraint_solver_forces = (
                         True  # for example contacts
                     )
-                    sensor_options.use_world_frame = True  # report forces in world frame (easier to get vertical components)
+                    sensor_options.use_world_frame = True  # 在世界坐标系下报告力（更容易获取垂直分量）
                     self.gym.create_asset_force_sensor(
                         object_asset, 0, sensor_pose, sensor_options
                     )
@@ -486,7 +489,7 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                         ]  # Default position if YAML doesn't exist
                     self.object_target_positions.append(
                         torch.tensor(
-                            target_position, device=self.device, dtype=torch.float
+                            target_position, device=self.device, dtype=torch.float    # 这个地方的target_position就是交互的目标位置（local）
                         ).view(-1)
                     )
 
@@ -499,9 +502,11 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
             )
 
     def build_env(self, env_id, env_ptr, humanoid_asset):
-        col_group = env_id
+        col_group = env_id              # 每一个humanoid使用不同的碰撞组，这样他们就不会碰撞
         col_filter = 0 if self.config.robot.asset.self_collisions else 1
         segmentation_id = 0
+
+        # ----------------------------------------- 创建人形 actor -----------------------------------------
 
         start_pose = gymapi.Transform()
         asset_file = self.config.robot.asset.asset_file_name
@@ -513,26 +518,28 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
         else:
             char_h = 0.89
 
-        # Space out the humanoids on initial spawn.
-        start_offset = [env_id, env_id, env_id]
-        start_offset[self.up_axis_idx] = char_h
+        # 在初始生成时将各个人形分散开来。
+        start_offset = [env_id, env_id, env_id] # get_envs_respawn_position 函数会重新定义人形的位置，所以这里先随便弄一个位置
+        start_offset[self.up_axis_idx] = char_h # self.up_axis_idx就是之前定义过的z轴
         start_pose.p = gymapi.Vec3(*start_offset)
 
         start_pose.r = gymapi.Quat(0.0, 0.0, 0.0, 1.0)
 
         humanoid_handle = self.gym.create_actor(
-            env_ptr,
-            humanoid_asset,
-            start_pose,
-            "humanoid",
-            col_group,
-            col_filter,
+            env_ptr,                       # Environment Handle
+            humanoid_asset,                # Asset Handle
+            start_pose,                    # Initial Pose
+            "humanoid",                    # Actor Name
+            col_group,                     # Collision Group
+            col_filter,                    # Collision Filter
             segmentation_id,
         )
 
         self.gym.enable_actor_dof_force_sensors(env_ptr, humanoid_handle)
 
-        humanoid_mass = np.sum(
+        # ----------------------------------------- 上色 -----------------------------------------
+
+        humanoid_mass = np.sum(            # (没用到)
             [
                 prop.mass
                 for prop in self.gym.get_actor_rigid_body_properties(
@@ -547,21 +554,26 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                 humanoid_handle,
                 j,
                 gymapi.MESH_VISUAL,
-                gymapi.Vec3(0.54, 0.85, 0.2),
+                gymapi.Vec3(0.54, 0.85, 0.2), # 颜色
             )
+
+        # ----------------------------------------- 设置关节驱动模式 -----------------------------------------
 
         dof_prop = self.gym.get_asset_dof_properties(humanoid_asset)
         if self.isaac_pd:
             dof_prop["driveMode"] = gymapi.DOF_MODE_POS
-            if self.config.robot.control.isaac_pd_scale:
-                pd_scale = humanoid_mass / self.config.robot.default_humanoid_mass
-                dof_prop["stiffness"] *= pd_scale
-                dof_prop["damping"] *= pd_scale
+            if self.config.robot.control.isaac_pd_scale: # (没用到)
+                pd_scale = humanoid_mass / self.config.robot.default_humanoid_mass  # 根据当前人形的质量与默认质量的比例缩放PD增益。
+                dof_prop["stiffness"] *= pd_scale                                   # 这样可以让控制器适应不同尺寸和重量的人形，提高稳定性。
+                dof_prop["damping"] *= pd_scale                                     # 模型越重，关节控制器的“力气”（刚度）和“稳定性”（阻尼）就越强
         else:
             dof_prop["driveMode"] = gymapi.DOF_MODE_EFFORT
 
         self.gym.set_actor_dof_properties(env_ptr, humanoid_handle, dof_prop)
 
+        # ----------------------------------------- 设置碰撞过滤 -----------------------------------------
+        # 当两个刚体的filter值进行按位与操作（bitwise AND）结果为0时，这两个刚体不会发生碰撞
+        # 当结果非0时，碰撞检测正常进行
         filter_ints = self.config.robot.asset.filter_ints
         if filter_ints is not None:
             props = self.gym.get_actor_rigid_shape_properties(env_ptr, humanoid_handle)
@@ -587,9 +599,12 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
         total_objects = sum(len(scene["objects"]) for scene in self.scene_lib.scenes)
         with Progress() as progress:
             task = progress.add_task("[cyan]Spawning objects...", total=total_objects)
+            # 遍历所有场景，为每个场景生成物体
             for scene_idx, scene_spawn_info in enumerate(self.scene_lib.scenes):
+                # 获取当前场景在世界坐标系中的偏移量
                 scene_offset = self.scene_lib.scene_offsets[scene_idx]
 
+                # 获取场景原点处的地面高度
                 height_at_scene_origin = self.get_ground_heights(
                     torch.tensor(
                         [[scene_offset[0], scene_offset[1]]],
@@ -597,6 +612,7 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                         dtype=torch.float,
                     )
                 ).item()
+                # 保存场景在世界坐标系中的完整位置（包含高度）
                 self.scene_position.append(
                     torch.tensor(
                         [scene_offset[0], scene_offset[1], height_at_scene_origin],
@@ -605,55 +621,65 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                     )
                 )
 
+                # 遍历当前场景中的所有物体 （通常只有一个物体）
                 for obj in scene_spawn_info["objects"]:
+                    # 更新进度条显示当前正在生成的物体
                     progress.update(
                         task,
                         advance=1,
                         description=f"[cyan]Spawning {obj['path'].split('/')[-1]}",
                     )
                     object_id = obj["id"]
+                    # 从物体生成列表中获取物体的详细信息
                     object_spawn_info = self.scene_lib.object_spawn_list[object_id]
 
+                    # 增加物体总数计数器
                     self.total_num_objects += 1
 
+                    # 根据物体路径获取对应的物体资产
                     object_asset = self.object_assets[
                         self.scene_lib.object_path_to_id[object_spawn_info.object_path]
                     ]
+                    # 从路径中提取物体名称（去掉文件扩展名）
                     object_name = object_spawn_info.object_path.split("/")[-1].split(
                         "."
                     )[0]
+                    # 创建物体的变换矩阵（位置和旋转）
                     object_pose = gymapi.Transform()
 
+                    # 获取物体的初始姿态（在场景本地坐标系中）
                     initial_object_pose = self.scene_lib.get_object_pose(
                         torch.tensor([object_id], device=self.device, dtype=torch.int),
                         torch.tensor([0.0], device=self.device, dtype=torch.float),
                     )
 
-                    # Calculate the global position of the object
+                    # 计算物体在全局坐标系中的位置
+                    # 将场景偏移量与物体的本地位置相加得到全局位置
                     global_object_position = torch.tensor(
                         [
                             scene_offset[0] + initial_object_pose.translations[0, 0],
                             scene_offset[1] + initial_object_pose.translations[0, 1],
-                            0,  # We'll set the z-coordinate later
+                            0,  # z坐标稍后设置（需要根据地形高度调整）
                         ],
                         device=self.device,
                         dtype=torch.float,
                     )
 
-                    # Convert global position to terrain map coordinates
+                    # 将全局位置转换为地形图坐标（网格索引）
                     terrain_coords = (
                         global_object_position[:2] / self.terrain.horizontal_scale
                     ).long()
 
-                    # Assert that the object is within the valid range of the height samples
+                    # 验证物体是否在高度采样的有效范围内（x轴）
                     assert (
                         0 <= terrain_coords[0] < self.height_samples.shape[0] - 2
                     ), f"Scene {scene_idx}: Object {object_name} is outside the valid range of height samples (x-axis)"
+                    # 验证物体是否在高度采样的有效范围内（y轴）
                     assert (
                         0 <= terrain_coords[1] < self.height_samples.shape[1] - 2
                     ), f"Scene {scene_idx}: Object {object_name} is outside the valid range of height samples (y-axis)"
 
-                    # Assert that the object is in the designated spawn area
+                    # 验证物体是否在指定的生成区域内（物体游乐场区域）
                     assert (
                         self.terrain.tot_cols
                         - self.terrain.border
@@ -662,7 +688,7 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                         < self.terrain.tot_cols - self.terrain.border
                     ), f"Scene {scene_idx}: Object {object_name} is not in the designated spawn area"
 
-                    # Assert that the terrain is not "flat" at the object's location
+                    # 验证物体位置的地形不是"平坦"的（确保物体放置在有特征的地形上）
                     assert not (
                         self.terrain.flat_field_raw[
                             terrain_coords[0], terrain_coords[1]
@@ -670,18 +696,22 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                         == 0
                     ), f"Scene {scene_idx}: Object {object_name} is placed on flat terrain"
 
+                    # 获取物体位置处的地形高度
                     terrain_height = self.get_ground_heights(
                         global_object_position[:2].unsqueeze(0)
                     ).item()
+                    # 设置物体的z坐标：地形高度 + 物体相对于地面的高度偏移
                     global_object_position[2] = (
                         terrain_height + initial_object_pose.translations[0, 2]
                     )
 
+                    # 设置物体在Isaac Gym中的位置
                     object_pose.p = gymapi.Vec3(
                         global_object_position[0],
                         global_object_position[1],
                         global_object_position[2],
                     )
+                    # 设置物体在Isaac Gym中的旋转（四元数）
                     object_pose.r = gymapi.Quat(
                         initial_object_pose.rotations[0, 0],
                         initial_object_pose.rotations[0, 1],
@@ -689,53 +719,63 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                         initial_object_pose.rotations[0, 3],
                     )
 
+                    # 从路径中提取物体类别（倒数第二级目录）
                     object_category = object_spawn_info.object_path.split("/")[-2]
 
+                    # 记录物体所属的场景ID
                     self.object_id_to_scene_id.append(scene_idx)
 
+                    # 获取物体的目标位置并计算全局目标位置
                     object_target_position = self.object_target_positions[
                         self.scene_lib.object_path_to_id[object_spawn_info.object_path]
                     ]
                     self.object_target_position.append(
                         object_target_position + global_object_position
                     )
+                    # 保存生成的物体名称（类别_名称）
                     self.spawned_object_names.append(
                         object_category + "_" + object_name
                     )
 
+                    # 在Isaac Gym环境中创建物体演员（actor）
                     object_handle = self.gym.create_actor(
                         env_ptr, object_asset, object_pose, object_name, -1, 0
                     )
                     self.object_handles.append(object_handle)
+                    # 获取物体在仿真域中的索引
                     object_idx = self.gym.get_actor_index(
                         env_ptr, object_handle, gymapi.DOMAIN_SIM
                     )
                     self.object_indices.append(object_idx)
 
-                    # Extract the object name from the full path
+                    # 从完整路径中提取物体名称（去掉扩展名）
                     object_name = os.path.splitext(
                         os.path.basename(object_spawn_info.object_path)
                     )[0]
 
-                    # Ensure the .obj file exists
+                    # 检查网格文件是否存在，支持多种格式（.obj, .stl, .ply）
                     obj_path = object_spawn_info.object_path.replace(".urdf", ".obj")
                     stl_path = object_spawn_info.object_path.replace(".urdf", ".stl")
                     ply_path = object_spawn_info.object_path.replace(".urdf", ".ply")
 
+                    # 根据可用的网格文件类型加载物体几何信息
                     if (
                         os.path.exists(obj_path)
                         or os.path.exists(stl_path)
                         or os.path.exists(ply_path)
                     ):
+                        # 按优先级选择网格文件格式
                         if os.path.exists(obj_path):
                             mesh_path = obj_path
                         elif os.path.exists(stl_path):
                             mesh_path = stl_path
                         else:
                             mesh_path = ply_path
+                        # 加载网格并计算边界框
                         mesh = as_mesh(trimesh.load_mesh(mesh_path))
                         w_x, w_y, w_z, m_x, m_y, m_z = compute_bounding_box(mesh)
                     elif object_spawn_info.object_path.endswith(".urdf"):
+                        # 如果只有URDF文件，从XML中解析几何尺寸
                         import xml.etree.ElementTree as ET
 
                         tree = ET.parse(object_spawn_info.object_path)
@@ -750,27 +790,32 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                                     box = geometry.find("box")
                                     if box is not None:
                                         size = box.get("size")
-
+                                        # 解析box的尺寸参数
                                         w_x, w_y, w_z = map(float, size.split())
+                                        # 计算边界框的最小坐标（假设box中心在原点）
                                         m_x = -w_x / 2
                                         m_y = -w_y / 2
                                         m_z = -w_z / 2
                                         has_size = True
+                        # 确保URDF文件包含了必要的尺寸参数
                         assert (
                             has_size
                         ), f"URDF {object_spawn_info.object_path} must provide size parameters."
                     else:
+                        # 如果没有找到任何有效的物体文件，抛出错误
                         raise FileNotFoundError(
                             f"Object file not found: {obj_path}, {stl_path}, or valid URDF"
                         )
 
-                    min_x = m_x
-                    max_x = min_x + w_x
-                    min_y = m_y
-                    max_y = min_y + w_y
-                    min_z = m_z
-                    max_z = min_z + w_z
+                    # 计算物体的完整边界框坐标（相对于物体中心）
+                    min_x = m_x  # x轴最小坐标
+                    max_x = min_x + w_x  # x轴最大坐标
+                    min_y = m_y  # y轴最小坐标
+                    max_y = min_y + w_y  # y轴最大坐标
+                    min_z = m_z  # z轴最小坐标
+                    max_z = min_z + w_z  # z轴最大坐标
 
+                    # 保存物体的边界框信息到张量中，用于碰撞检测和渲染
                     self.object_dims.append(
                         torch.tensor(
                             [min_x, max_x, min_y, max_y, min_z, max_z],
@@ -779,12 +824,16 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                         )
                     )
 
-                    # Use offsets from spawn_info for object_root_states_offsets
+                    # 从场景库中获取物体的偏移量信息，用于设置物体的根状态偏移
                     translation_offset = self.scene_lib.object_translation_offsets[
                         object_id
-                    ]
-                    rotation_offset = self.scene_lib.object_rotation_offsets[object_id]
+                    ]  # 平移偏移量
+                    rotation_offset = self.scene_lib.object_rotation_offsets[object_id]  # 旋转偏移量
 
+                    # 将物体的根状态偏移信息组合起来，包括：
+                    # 1. 平移偏移量（3维向量）
+                    # 2. 旋转偏移量（4维四元数）  
+                    # 3. 物体类型索引（1维标量）
                     self.object_root_states_offsets.append(
                         torch.cat(
                             [
@@ -799,19 +848,24 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                         )
                     )
 
+                    # 设置高度图的缩放比例
                     scale = 2.0
+                    # 构建高度图缓存文件的路径
                     heightmap_path = osp.join(
                         os.path.dirname(object_spawn_info.object_path),
                         f"{object_name}_{scale}_{self.terrain.config.horizontal_scale}.pt",
                     )
+                    # 如果高度图缓存文件存在，直接加载
                     if osp.exists(heightmap_path):
-                        heightmap = torch.load(heightmap_path)
+                        heightmap = torch.load(heightmap_path, weights_only=False)
                     else:
+                        # 否则创建新的物体高度图
                         print(
                             "Creating object heightmap for object {} at scale {}".format(
                                 object_name, scale
                             )
                         )
+                        # 根据物体尺寸和地形分辨率计算高度图的维度
                         heightmap = torch.tensor(
                             get_object_heightmap(
                                 mesh,
@@ -830,15 +884,19 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                             ),
                             dtype=torch.float,
                         )
+                        # 保存高度图到缓存文件
                         torch.save(heightmap, heightmap_path)
 
+                    # 将高度图移动到GPU设备
                     heightmap = heightmap.to(self.device)
 
-                    # 1. Create a grid for the object in global coordinates --> each cell has the global coordinates of the center of that cell.
-                    # 2. Do the same for the heightmap.
-                    # 3. Go cell by cell in the heightmap, where the object resides.
-                    # 3.1. Find the appropriate cells in the object grid, and perform bilinear interpolation to get the height at that point.
+                    # 将物体高度图整合到全局地形高度图中的算法步骤：
+                    # 1. 为物体在全局坐标中创建网格 --> 每个单元格包含该单元格中心的全局坐标
+                    # 2. 对高度图执行相同操作
+                    # 3. 逐个遍历物体所在区域的高度图单元格
+                    # 4. 在物体网格中找到相应的单元格，执行双线性插值获取该点的高度
 
+                    # 计算物体在全局坐标系中的最小坐标（左下角）
                     object_min_coords = [
                         (
                             scene_offset[0]
@@ -851,30 +909,35 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                             + m_y
                         ).item(),
                     ]
+                    # 计算物体在全局坐标系中的最大坐标（右上角）
                     object_max_coords = [
                         object_min_coords[0] + w_x,
                         object_min_coords[1] + w_y,
                     ]
+                    # 将物体坐标转换为地形网格的单元格索引（最小边界）
                     object_min_cell_idx = [
                         int(np.floor(coord / self.terrain.config.horizontal_scale))
                         for coord in object_min_coords
                     ]
+                    # 将物体坐标转换为地形网格的单元格索引（最大边界）
                     object_max_cell_idx = [
                         int(np.ceil(coord / self.terrain.config.horizontal_scale))
                         for coord in object_max_coords
                     ]
 
+                    # 遍历物体影响的所有地形网格单元格（扩展1个单元格边界以确保完整覆盖）
                     for x in range(
                         object_min_cell_idx[0] - 1, object_max_cell_idx[0] + 1
                     ):
                         for y in range(
                             object_min_cell_idx[1] - 1, object_max_cell_idx[1] + 1
                         ):
-                            # get coordinates in object-relative frame, remove object offset
+                            # 获取当前地形网格单元格在全局坐标系中的坐标
                             object_coords = [
                                 x * self.terrain.config.horizontal_scale,
                                 y * self.terrain.config.horizontal_scale,
                             ]
+                            # 转换为相对于物体中心的坐标（移除场景偏移和物体位置偏移）
                             object_coords = [
                                 object_coords[0]
                                 - (
@@ -887,11 +950,13 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                                     + initial_object_pose.translations[0, 1]
                                 ).item(),
                             ]
+                            # 转换为相对于物体边界框的坐标（移除物体最小坐标偏移）
                             object_coords = [
                                 object_coords[0] - m_x,
                                 object_coords[1] - m_y,
                             ]
 
+                            # 计算在物体高度图中的索引位置（考虑缩放因子）
                             object_floor_idx = [
                                 int(
                                     np.floor(
@@ -907,13 +972,14 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                                 ),
                             ]
 
-                            # TODO: For now, pick max height since there's some issue with billinear due to discretization size
+                            # TODO: 目前选择最大高度值，因为由于离散化尺寸问题双线性插值存在一些问题
 
-                            # perform billinear interpolation, if out of bounds interpolate with 0
+                            # 执行双线性插值，如果超出边界则用0进行插值
                             x1 = object_floor_idx[0]
                             x2 = x1 + 1
                             y1 = object_floor_idx[1]
                             y2 = y1 + 1
+                            # 注释掉的部分是完整双线性插值的坐标计算
                             # xm = object_coords[0] / (
                             #     self.terrain.config.horizontal_scale / scale
                             # )
@@ -921,6 +987,7 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                             #     self.terrain.config.horizontal_scale / scale
                             # )
 
+                            # 获取高度图中四个相邻点的高度值（边界检查，超出边界用0）
                             x1y1 = (
                                 heightmap[x1, y1]
                                 if 0 <= x1 < heightmap.shape[0]
@@ -946,9 +1013,12 @@ class Humanoid(BaseHumanoid, GymBaseInterface):  # type: ignore[misc]
                                 else 0
                             )
 
+                            # 注释掉的是完整的双线性插值公式
                             # height_point = (x2 - xm) * (y2 - ym) * x1y1 + (xm - x1) * (y2 - ym) * x2y1 + (x2 - xm) * (ym - y1) * x1y2 + (xm - x1) * (ym - y1) * x2y2
+                            # 简化版本：取四个点的最大高度值
                             height_point = max(x1y1, x2y1, x1y2, x2y2)
 
+                            # 将物体高度添加到全局地形高度图中
                             self.height_samples[x, y] += height_point
 
     ###############################################################

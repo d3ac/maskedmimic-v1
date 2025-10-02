@@ -5,6 +5,11 @@ from phys_anim.utils.device_dtype_mixin import DeviceDtypeModuleMixin
 
 
 class StepTracker(DeviceDtypeModuleMixin):
+    """
+    用于跟踪每个环境在训练过程中已经训练了多少步。
+    在每个训练步骤中，StepTracker 会记录每个环境已经训练了多少步，并更新当前的最大步数。
+    当环境达到最大步数时，环境会重置。
+    """
     steps: Tensor
 
     def __init__(
@@ -40,9 +45,9 @@ class StepTracker(DeviceDtypeModuleMixin):
 
         n = len(env_ids)
         self.steps[env_ids] = 0
-        self.cur_max_steps[env_ids] = torch.randint(
-            self.min_steps,
-            self.max_steps,
+        self.cur_max_steps[env_ids] = torch.randint( # 如果所有episode都是固定长度，智能体可能会学到一些不良的周期性行为模式。
+            self.min_steps,                          # 在episode快结束时采取冒险行动（因为知道马上要重置了）
+            self.max_steps,                          # 形成依赖于固定时间步的策略
             size=[n],
             dtype=torch.long,
             device=self.device,

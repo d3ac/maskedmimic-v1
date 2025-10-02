@@ -30,6 +30,14 @@ import os
 import sys
 from pathlib import Path
 
+# 设置分布式训练的环境变量来解决socket超时问题
+os.environ.setdefault("NCCL_TIMEOUT", "18000")  # 300分钟超时
+os.environ.setdefault("NCCL_BLOCKING_WAIT", "1")
+os.environ.setdefault("TORCH_DISTRIBUTED_DEBUG", "INFO")
+os.environ.setdefault("NCCL_ASYNC_ERROR_HANDLING", "1")
+# 增加TCP store的超时时间
+os.environ.setdefault("TORCH_DISTRIBUTED_STORE_TIMEOUT", "18000")  # 300分钟
+
 import hydra
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
@@ -91,6 +99,12 @@ def main(config: OmegaConf):
     # ======================================================================================================
 
     torch.set_float32_matmul_precision("medium")
+    
+    # 设置分布式训练的额外超时参数
+    if torch.distributed.is_available():
+        # 设置默认的分布式超时时间
+        import datetime
+        timeout = datetime.timedelta(seconds=18000)  # 300分钟
 
     fabric: Fabric = instantiate(config.fabric)
     fabric.launch()
