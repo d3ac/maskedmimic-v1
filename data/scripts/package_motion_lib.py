@@ -41,7 +41,7 @@ from hydra import compose, initialize
 def main(
     motion_file: Path,
     amass_data_path: Path,
-    outpath: Path,
+    ptoutpath: Path,
     humanoid_type: str = "smpl",
     create_text_embeddings: bool = False,
     num_data_splits: int = None,
@@ -52,7 +52,7 @@ def main(
     Args:
         motion_file (Path): 包含运动数据列表的yaml文件路径。
         amass_data_path (Path): AMASS数据集的根目录路径，用于解析运动文件中的相对路径。
-        outpath (Path): 保存处理后的MotionLib状态文件的输出路径。
+        ptoutpath (Path): 保存处理后的MotionLib状态文件的输出路径。
         humanoid_type (str, optional): 使用的人形模型类型，默认为 "smpl"。
         create_text_embeddings (bool, optional): 是否为运动数据创建文本嵌入，默认为 False。
         num_data_splits (int, optional): 将运动文件分割成的小文件数量。如果为None，则不分割。默认为 None。
@@ -169,7 +169,7 @@ def main(
         print("Saving motion state")
 
         # 将实例化的MotionLib的状态保存到二进制文件中
-        with open(outpath, "wb") as file:
+        with open(ptoutpath, "wb") as file:
             torch.save(mlib.state, file)
 
         # 删除临时文件

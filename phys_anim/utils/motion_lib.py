@@ -680,38 +680,39 @@ class MotionLib(DeviceDtypeModuleMixin):
 
         num_motion_files = len(motion_files)
 
-        for f in range(num_motion_files):
-            curr_file = motion_files[f]
+
+        for f in range(num_motion_files):  # 遍历所有动作文件
+            curr_file = motion_files[f]  # 获取当前动作文件路径
 
             print(
                 "Loading {:d}/{:d} motion files: {:s}".format(
                     f + 1, num_motion_files, curr_file
                 )
             )
-            curr_motion = self._load_motion_file(curr_file)
-            curr_motion = fix_motion_fps(
+            curr_motion = self._load_motion_file(curr_file)  # 加载动作文件
+            curr_motion = fix_motion_fps(  # 修正动作帧率以匹配目标帧率
                 curr_motion, motion_fpses[f], target_frame_rate, self.skeleton_tree
             )
-            motion_fpses[f] = float(curr_motion.fps)
+            motion_fpses[f] = float(curr_motion.fps)  # 更新动作的帧率记录
 
-            if self.fix_heights:
-                curr_motion = fix_heights(curr_motion, self.skeleton_tree)
+            if self.fix_heights:  # 如果启用了高度修正
+                curr_motion = fix_heights(curr_motion, self.skeleton_tree)  # 修正动作的高度，让最低的高度挨着地面，不要让他飘起来
 
-            curr_dt = 1.0 / motion_fpses[f]
+            curr_dt = 1.0 / motion_fpses[f]  # 计算当前动作的帧间隔时间
 
-            num_frames = curr_motion.global_translation.shape[0]
-            curr_len = 1.0 / motion_fpses[f] * (num_frames - 1)
+            num_frames = curr_motion.global_translation.shape[0]  # 获取动作的总帧数
+            curr_len = 1.0 / motion_fpses[f] * (num_frames - 1)  # 计算当前动作的总时长
 
-            motion_dt.append(curr_dt)
-            motion_num_frames.append(num_frames)
+            motion_dt.append(curr_dt)  # 记录帧间隔时间
+            motion_num_frames.append(num_frames)  # 记录总帧数
 
-            curr_dof_vels = self._compute_motion_dof_vels(curr_motion)
-            curr_motion.dof_vels = curr_dof_vels
+            curr_dof_vels = self._compute_motion_dof_vels(curr_motion)  # 计算动作的自由度速度
+            curr_motion.dof_vels = curr_dof_vels  # 将计算出的速度保存到动作数据中
 
-            motions.append(curr_motion)
-            motion_lengths.append(curr_len)
+            motions.append(curr_motion)  # 将处理后的动作添加到列表
+            motion_lengths.append(curr_len)  # 将动作时长添加到列表
 
-        num_sub_motions = len(sub_motion_to_motion)
+        num_sub_motions = len(sub_motion_to_motion)  # 获取子动作的总数
 
         for f in range(num_sub_motions):
             # Incase start/end weren't provided, set to (0, motion_length)
@@ -731,11 +732,11 @@ class MotionLib(DeviceDtypeModuleMixin):
                 with torch.inference_mode():
                     inputs = tokenizer(
                         motion_labels[f],
-                        padding=True,
-                        truncation=True,
+                        padding=True,            # padding那些比较短的句子，把所有的句子长度都弄成一样的
+                        truncation=True,         # 如果 input 超出了最长的长度就截断
                         return_tensors="pt",
                     )
-                    outputs = model(**inputs)
+                    outputs = model(**inputs)  # 输出包括了pooler_output（表示整句话的池化，一个token代表整个句子, [3 ,512]）, last_hidden_state（表示每个token的隐藏状态, [3, 12, 512]）
                     pooled_output = outputs.pooler_output  # pooled (EOS token) states
                     text_embeddings.append(pooled_output)  # should be [3, 512]
                     has_text_embeddings.append(True)

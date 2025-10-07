@@ -12,7 +12,7 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": [
-                "data/yaml_files/temp.yaml",
+                "data/yaml_files/temp copy.yaml",
                 "/data1/yueyi/data/amass",
                 "temp.pt",
                 "--create-text-embeddings"

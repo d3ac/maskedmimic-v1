@@ -12,3 +12,4 @@ __pycache__/
 **/__pycache__/
 *.pyc
 phys_anim/base_interface/__pycache__/
+train.pt

@@ -7,6 +7,24 @@ stage 2 : CUDA_VISIBLE_DEVICES=2,3,4,5,6,7 python phys_anim/train_agent.py +exp=
 inference : python phys_anim/eval_agent.py +robot=smpl +backbone=isaacgym +opt=masked_mimic/tasks/user_control +checkpoint="/data1/yueyi/code/maskedmimic-v1/results/masked_mimic/score_based.ckpt"
 # Installation
 
+------
+
+generate data for my work :
+
+1. python data/scripts/convert_amass_to_isaac.py /data1/yueyi/data/amass
+
+2. python data/scripts/create_motion_fps_yaml.py /data1/yueyi/data/amass --output-path data/yaml_files
+
+3. python data/scripts/process_hml3d_data.py data/yaml_files/train.yaml /data1/yueyi/data/amass
+
+4. python data/scripts/create_flipped_file.py data/yaml_files/train.yaml
+
+5. python data/scripts/package_motion_lib.py data/yaml_files/train_flipped.yaml /data1/yueyi/data/amass train.pt --create-text-embeddings
+
+文件保存为了 train.pt 在根目录下
+
+------
+
 This codebase supports both IsaacGym and IsaacSim. You can install one or both and
 the simulation backend is selected via the configuration file.
 
