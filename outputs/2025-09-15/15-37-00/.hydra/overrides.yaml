@@ -1,4 +1,0 @@
-- +robot=smpl
-- +backbone=isaacgym
-- +motion_file=/data1/yueyi/code/maskedmimic-v1/phys_anim/data/motions/smpl_humanoid_walk.npy
-- +checkpoint=/data1/yueyi/code/maskedmimic-v1/results/masked_mimic/score_based.ckpt

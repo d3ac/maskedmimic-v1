@@ -1,4 +1,0 @@
-- +robot=smpl
-- +backbone=isaacgym
-- +opt=masked_mimic/tasks/user_control
-- +checkpoint=/data1/yueyi/code/maskedmimic-v1/results/masked_mimic/score_based.ckpt
