@@ -76,6 +76,8 @@ class LoadedMotions(nn.Module):
         text_embeddings: Tensor = None,
         has_text_embeddings: Tensor = None,
         supported_scene_ids: List[List[str]] = None,
+        motion_labels = None,
+        motion_labels_raw = None,
         **kwargs,  # Catch some nn.Module arguments that aren't needed
     ):
         super().__init__()
@@ -100,6 +102,10 @@ class LoadedMotions(nn.Module):
         self.register_buffer(
             "has_text_embeddings", has_text_embeddings, persistent=False
         )
+        # motion_labels 是字符串列表，不能用 register_buffer，直接作为属性存储
+        self.motion_labels = motion_labels
+        self.motion_labels_raw = motion_labels_raw
+
         if supported_scene_ids is None:
             supported_scene_ids = [None for _ in range(len(motions))]
         self.supported_scene_ids = supported_scene_ids
@@ -668,18 +674,18 @@ class MotionLib(DeviceDtypeModuleMixin):
         text_embeddings = []
         has_text_embeddings = []
         (
-            motion_files,
+            motion_files,            # 一共有哪些动作文件
             motion_weights,
             motion_timings,
             motion_fpses,
-            sub_motion_to_motion,
+            sub_motion_to_motion,    # 这个submotion属于哪一个motion
             ref_respawn_offsets,
             motion_labels,
             supported_scene_ids,
+            motion_labels_raw,       # 原始个数的label
         ) = self._fetch_motion_files(motion_file)
 
         num_motion_files = len(motion_files)
-
 
         for f in range(num_motion_files):  # 遍历所有动作文件
             curr_file = motion_files[f]  # 获取当前动作文件路径
@@ -792,6 +798,8 @@ class MotionLib(DeviceDtypeModuleMixin):
             text_embeddings=text_embeddings,
             has_text_embeddings=has_text_embeddings,
             supported_scene_ids=supported_scene_ids,
+            motion_labels=motion_labels,
+            motion_labels_raw=motion_labels_raw,
         )
 
         num_motions = self.num_motions()
@@ -824,6 +832,7 @@ class MotionLib(DeviceDtypeModuleMixin):
             motion_fpses = []
             motion_labels = []
             supported_scene_ids = []
+            motion_labels_raw = []
 
             with open(os.path.join(os.getcwd(), motion_file), "r") as f:
                 motion_config = EasyDict(yaml.load(f, Loader=yaml.SafeLoader))
@@ -872,7 +881,8 @@ class MotionLib(DeviceDtypeModuleMixin):
                     motion_timings.append([start, end])
 
                     sub_motion_labels = []
-                    if "labels" in sub_motion:
+                    sub_motion_labels_raw = []
+                    if "labels" in sub_motion:                         # 这个地方的 motion_lable不用非得在 json文件里面读取，也可以直接去读txt文件，有 hml3d_id
                         # 我们假设每个动作有3个标签。
                         # 如果标签少于3个，则重复最后一个标签以补足数量。
                         # 如果没有标签，则使用空字符串作为标签。
@@ -884,12 +894,18 @@ class MotionLib(DeviceDtypeModuleMixin):
                             sub_motion_labels.append("")
                         while len(sub_motion_labels) < 3:
                             sub_motion_labels.append(sub_motion_labels[-1])
+                        
+                        for label in sub_motion.labels:
+                            sub_motion_labels_raw.append(label)
+
                     else:
+                        print(f"!!! No labels found for sub motion !!!")
                         sub_motion_labels.append("")
                         sub_motion_labels.append("")
                         sub_motion_labels.append("")
 
                     motion_labels.append(sub_motion_labels)
+                    motion_labels_raw.append(sub_motion_labels_raw)
 
                     if "supported_scenes" in sub_motion:
                         supported_scene_ids.append(sub_motion.supported_scenes)
@@ -916,6 +932,7 @@ class MotionLib(DeviceDtypeModuleMixin):
             ref_respawn_offsets,
             motion_labels,
             supported_scene_ids,
+            motion_labels_raw
         )
 
     def _calc_frame_blend(self, time, len, num_frames, dt):

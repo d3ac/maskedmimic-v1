@@ -12,9 +12,9 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": [
-                "data/yaml_files/temp copy.yaml",
+                "data/yaml_files/temp.yaml",
                 "/data1/yueyi/data/amass",
-                "temp.pt",
+                "temp_train.pt",
                 "--create-text-embeddings"
             ]
         }
