@@ -699,97 +699,132 @@ class BaseMaskedMimic(MaskedMimicHumanoid):
 
     def compute_reward(self, actions):
         """
-        Compute the reward for the current state of the simulation.
-
+        计算训练奖励函数 - 这是训练中最核心的函数之一
+        
+        该函数通过对比仿真环境中机器人的实际状态和从动作库加载的参考动作状态，
+        计算多个奖励组件，引导智能体学习模仿参考动作。
+        
         Args:
-            actions (Tensor): The actions taken by the agent.
+            actions (Tensor): 智能体采取的动作，shape (num_envs, num_actions)
 
         Returns:
-            Tensor: The computed reward for each environment.
-
-        The reward is computed based on the difference between the current state and the reference state
-        provided by the motion library. The following components are considered in the reward computation:
-        - Global translation (gt)
-        - Global rotation (gr)
-        - Root translation (rt)
-        - Root rotation (rr)
-        - Key bodies (kb)
-        - Degrees of freedom velocity (dv)
-
-        The reward function takes into account the alignment of the agent's state with the reference state,
-        as well as the smoothness and stability of the motion. The specific details of the reward computation
-        are defined in the implementation of this function.
+            无直接返回值，但会更新 self.rew_buf (每个环境的总奖励)
+            
+        奖励计算包含以下组件：
+            - gt_rew: 全局刚体位置奖励
+            - rt_rew: 根部位置奖励
+            - rh_rew: 根部高度奖励
+            - rv_rew: 根部线速度奖励
+            - rav_rew: 根部角速度奖励
+            - gv_rew: 全局线速度奖励
+            - gav_rew: 全局角速度奖励
+            - kb_rew: 关键身体部位奖励
+            - gr_rew: 全局旋转奖励
+            - lr_rew: 局部旋转奖励
+            - dv_rew: 关节速度奖励
+            - kbf_rew: 接触力奖励（鼓励平滑的接触）
+            - pow_rew: 功率惩罚（鼓励节能运动）
         """
+        
+        # ================================ 第一部分：获取参考动作状态 ================================
+        # 从动作库中根据当前的动作ID和时间，提取参考状态（ground truth）
         ref_state = self.motion_lib.get_mimic_motion_state(
             self.motion_ids, self.motion_times
         )
-        ref_gt = ref_state.rb_pos
-        ref_gr = ref_state.rb_rot
-        ref_lr = ref_state.local_rot
-        ref_gv = ref_state.rb_vel
-        ref_gav = ref_state.rb_ang_vel
-        ref_dv = ref_state.dof_vel
+        # 提取参考状态的各个组件（这些都是从pt文件中加载的预处理数据）
+        ref_gt = ref_state.rb_pos           # 参考：所有刚体的全局位置 (世界坐标系)
+        ref_gr = ref_state.rb_rot           # 参考：所有刚体的全局旋转 (世界坐标系，四元数)
+        ref_lr = ref_state.local_rot        # 参考：所有关节的局部旋转 (相对父关节，四元数)
+        ref_gv = ref_state.rb_vel           # 参考：所有刚体的全局线速度 (世界坐标系)
+        ref_gav = ref_state.rb_ang_vel      # 参考：所有刚体的全局角速度 (世界坐标系)
+        ref_dv = ref_state.dof_vel          # 参考：所有关节的角速度 (局部坐标系)
 
+        # 只保留有DOF的刚体对应的局部旋转
         ref_lr = ref_lr[:, self.dof_body_ids]
+        # 提取参考状态的关键身体部位（如手、脚）
         ref_kb = self.process_kb(ref_gt, ref_gr)
 
+        # ================================ 第二部分：获取当前仿真状态 ================================
+        # 从仿真环境中获取机器人的当前实际状态
         current_state = self.get_bodies_state()
         gt, gr, gv, gav = (
-            current_state.body_pos,
-            current_state.body_rot,
-            current_state.body_vel,
-            current_state.body_ang_vel,
+            current_state.body_pos,         # 当前：所有刚体的全局位置
+            current_state.body_rot,         # 当前：所有刚体的全局旋转
+            current_state.body_vel,         # 当前：所有刚体的线速度
+            current_state.body_ang_vel,     # 当前：所有刚体的角速度
         )
-        # first remove height based on current position
+        
+        # 对当前位置进行坐标修正，使其与参考数据对齐
+        # 第一步：根据当前根部位置获取地面高度，并从所有刚体的Z坐标中减去
+        # 这样可以消除地形高度的影响，让机器人"站在"同一水平面上比较
         gt[:, :, -1:] -= self.get_ground_heights(gt[:, 0, :2]).view(self.num_envs, 1, 1)
-        # then remove offset to get back to the ground-truth data position
+        
+        # 第二步：减去重生时的XY偏移量，回到参考数据的坐标系
+        # 这是因为机器人可能在地图的不同位置重生，需要对齐坐标系
         gt[..., :2] -= self.respawn_offset_relative_to_data.clone()[..., :2].view(
             self.num_envs, 1, 2
         )
 
+        # 提取当前状态的关键身体部位
         kb = self.process_kb(gt, gr)
 
-        rt = gt[:, 0]
-        ref_rt = ref_gt[:, 0]
+        # ================================ 第三部分：提取根部（Root）状态 ================================
+        # 根部通常是Pelvis（骨盆），是机器人的中心刚体，索引为0
+        rt = gt[:, 0]           # 当前根部位置
+        ref_rt = ref_gt[:, 0]   # 参考根部位置
 
+        # 如果配置为忽略高度（只关心XY平面运动），则只保留XY坐标
         if self.config.mimic_reward_config.rt_ignore_height:
             rt = rt[..., :2]
             ref_rt = ref_rt[..., :2]
 
-        rr = gr[:, 0]
-        ref_rr = ref_gr[:, 0]
+        rr = gr[:, 0]           # 当前根部旋转
+        ref_rr = ref_gr[:, 0]   # 参考根部旋转
 
+        # 计算当前和参考状态的朝向的逆四元数
+        # 这用于将全局坐标转换到以机器人朝向为基准的局部坐标系
         inv_heading = torch_utils.calc_heading_quat_inv(rr, self.w_last)
         ref_inv_heading = torch_utils.calc_heading_quat_inv(ref_rr, self.w_last)
 
-        rv = gv[:, 0]
-        ref_rv = ref_gv[:, 0]
+        rv = gv[:, 0]           # 当前根部线速度
+        ref_rv = ref_gv[:, 0]   # 参考根部线速度
 
-        rav = gav[:, 0]
-        ref_rav = ref_gav[:, 0]
+        rav = gav[:, 0]         # 当前根部角速度
+        ref_rav = ref_gav[:, 0] # 参考根部角速度
 
-        dp, dv = self.get_dof_state()
+        # ================================ 第四部分：获取关节状态 ================================
+        # 从仿真环境获取关节位置和关节速度
+        dp, dv = self.get_dof_state()  # dp: dof position, dv: dof velocity
 
+        # 将关节位置（dof_pos）转换为局部旋转四元数
+        # 这是因为奖励计算需要用四元数形式的局部旋转
         lr = dof_to_local(dp, self.get_dof_offsets(), self.w_last)
 
+        # 如果配置要求，将根部旋转也加入局部旋转列表
+        # 这样可以同时对根部朝向和关节姿态进行奖励计算
         if self.config.mimic_reward_config.add_rr_to_lr:
             rr = gr[:, 0]
             ref_rr = ref_gr[:, 0]
-
+            # 在第一个维度拼接根部旋转
             lr = torch.cat([rr.unsqueeze(1), lr], dim=1)
             ref_lr = torch.cat([ref_rr.unsqueeze(1), ref_lr], dim=1)
 
+        # ================================ 第五部分：计算跟踪奖励 ================================
+        # 调用核心奖励函数，计算当前状态与参考状态之间的匹配程度
+        # 该函数返回一个字典，包含多个奖励组件（gt_rew, rt_rew, kb_rew等）
         rew_dict = exp_tracking_reward(
-            gt=gt,
-            rt=rt,
-            kb=kb,
-            gr=gr,
-            lr=lr,
-            rv=rv,
-            rav=rav,
-            gv=gv,
-            gav=gav,
-            dv=dv,
+            # 当前状态
+            gt=gt,      # 全局刚体位置
+            rt=rt,      # 根部位置
+            kb=kb,      # 关键身体部位
+            gr=gr,      # 全局刚体旋转
+            lr=lr,      # 局部关节旋转
+            rv=rv,      # 根部线速度
+            rav=rav,    # 根部角速度
+            gv=gv,      # 全局线速度
+            gav=gav,    # 全局角速度
+            dv=dv,      # 关节速度
+            # 参考状态
             ref_gt=ref_gt,
             ref_rt=ref_rt,
             ref_kb=ref_kb,
@@ -800,29 +835,40 @@ class BaseMaskedMimic(MaskedMimicHumanoid):
             ref_gv=ref_gv,
             ref_gav=ref_gav,
             ref_dv=ref_dv,
-            joint_reward_weights=self.reward_joint_weights,
+            # 配置参数
+            joint_reward_weights=self.reward_joint_weights,  # 不同关节的权重
             config=self.config.mimic_reward_config,
             w_last=self.w_last,
         )
 
+        # ================================ 第六部分：计算额外奖励组件 ================================
+        
+        # 6.1 接触力奖励（Key Body Force Reward）
+        # 鼓励机器人平滑地与地面接触，惩罚突然的接触力变化
         current_contact_forces = self.get_bodies_contact_buf()
+        # 计算接触力的减少量（只关注力减小的情况）
         forces_delta = torch.clip(
             self.prev_contact_forces - current_contact_forces, min=0
         )[
-            :, self.non_termination_contact_body_ids, 2
-        ]  # get the Z axis
+            :, self.non_termination_contact_body_ids, 2  # 只取Z轴（垂直）方向的力
+        ]
+        # 接触力减小越平滑，奖励越高（用指数函数放大差异）
         kbf_rew = (
             forces_delta.sum(-1)
             .mul(self.config.mimic_reward_config.component_coefficients.kbf_rew_c)
             .exp()
         )
-
         rew_dict["kbf_rew"] = kbf_rew
 
-        dof_forces = self.get_dof_forces()
+        # 6.2 功率惩罚（Power Reward）
+        # 鼓励机器人使用较小的力矩，模拟真实的能量消耗
+        dof_forces = self.get_dof_forces()  # 获取各个关节的力矩
+        # 功率 = |力矩 × 角速度|
         power = torch.abs(torch.multiply(dof_forces, dv)).sum(dim=-1)
-        pow_rew = -power
+        pow_rew = -power  # 负奖励：功率越大，惩罚越大
 
+        # 在刚重置后的宽限期内不计算功率惩罚
+        # 因为刚重置时机器人可能需要较大的力矩来调整姿态
         has_reset_grace = (
             self.reset_track_steps.steps <= self.config.mimic_reset_track.grace_period
         )
@@ -830,25 +876,38 @@ class BaseMaskedMimic(MaskedMimicHumanoid):
 
         rew_dict["pow_rew"] = pow_rew
 
+        # ================================ 第七部分：奖励缩放与汇总 ================================
+        # 将每个奖励组件乘以对应的权重，得到缩放后的奖励
+        # 例如：gt_rew * gt_rew_w, rt_rew * rt_rew_w, ...
         self.last_scaled_rewards: Dict[str, Tensor] = {
             k: v * getattr(self.config.mimic_reward_config.component_weights, f"{k}_w")
             for k, v in rew_dict.items()
         }
 
+        # 所有缩放后的奖励求和，得到总的跟踪奖励
         tracking_rew = sum(self.last_scaled_rewards.values())
 
+        # 加上一个正常数，使奖励整体偏正（有利于训练稳定性）
         self.rew_buf = tracking_rew + self.config.mimic_reward_config.positive_constant
 
+        # ================================ 第八部分：记录日志 ================================
+        # 记录原始奖励（未缩放）的均值和标准差
         for rew_name, rew in rew_dict.items():
             self.log_dict[f"raw/{rew_name}_mean"] = rew.mean()
             self.log_dict[f"raw/{rew_name}_std"] = rew.std()
 
+        # 记录缩放后奖励的均值和标准差
         for rew_name, rew in self.last_scaled_rewards.items():
             self.log_dict[f"scaled/{rew_name}_mean"] = rew.mean()
             self.log_dict[f"scaled/{rew_name}_std"] = rew.std()
 
+        # ================================ 第九部分：计算误差指标（用于监控训练进度）================================
+        
+        # 9.1 笛卡尔误差：在机器人局部坐标系下计算位置误差
+        # 将全局位置转换到以机器人朝向为基准的局部坐标系
         local_ref_gt = self.rotate_pos_to_local(ref_gt, ref_inv_heading)
         local_gt = self.rotate_pos_to_local(gt, inv_heading)
+        # 计算相对于根部的相对位置差异
         cartesian_err = (
             ((local_ref_gt - local_ref_gt[:, 0:1]) - (local_gt - local_gt[:, 0:1]))
             .pow(2)
@@ -857,40 +916,48 @@ class BaseMaskedMimic(MaskedMimicHumanoid):
             .mean(-1)
         )
 
-        # Remove the last entry of the "body parts" to remove heading and velocity.
+        # 9.2 获取Masked Mimic特定的掩码
+        # 在Masked Mimic任务中，只需要跟踪部分身体部位（被掩码选中的部位）
+        # 掩码的最后一项通常是朝向和速度，这里移除它
         mask = self.masked_mimic_target_bodies_masks.view(
             self.num_envs,
             self.config.mimic_target_pose.num_future_steps,
             self.num_conditionable_bodies,
-            2,
-        )[:, 0, :-1, :]
+            2,  # 2表示：[位置掩码, 旋转掩码]
+        )[:, 0, :-1, :]  # 只取第一个时间步，移除最后一个身体部位
 
-        translation_mask = mask[..., 0].unsqueeze(-1)
-        rotation_mask = mask[..., 1]
+        translation_mask = mask[..., 0].unsqueeze(-1)  # 位置掩码
+        rotation_mask = mask[..., 1]                    # 旋转掩码
 
+        # 计算归一化系数（被掩码选中的身体部位数量）
         translation_mask_coeff = translation_mask.float().sum(1).view(-1) + 1e-6
         rotation_mask_coeff = rotation_mask.float().sum(1) + 1e-6
 
+        # 获取可控制的身体部位索引
         active_bodies_ids = self.masked_mimic_conditionable_bodies_ids
 
+        # 9.3 计算位置误差（只针对掩码选中的身体部位）
         gt_err = (
-            (ref_gt - gt)[:, active_bodies_ids]
-            .mul(translation_mask)
-            .pow(2)
-            .sum(-1)
-            .sqrt()
-            .sum(-1)
-            .div(translation_mask_coeff)
+            (ref_gt - gt)[:, active_bodies_ids]  # 提取选中的身体部位
+            .mul(translation_mask)                # 应用位置掩码
+            .pow(2)                               # 平方
+            .sum(-1)                              # 对xyz求和
+            .sqrt()                               # 开方得到欧氏距离
+            .sum(-1)                              # 对所有身体部位求和
+            .div(translation_mask_coeff)          # 归一化
         )
+        
+        # 9.4 计算最大关节误差（用于判断最差的关节表现）
         max_joint_err = (
             (ref_gt - gt)[:, active_bodies_ids]
             .mul(translation_mask)
             .pow(2)
             .sum(-1)
             .sqrt()
-            .max(-1)[0]
+            .max(-1)[0]  # 取最大值
         )
 
+        # 9.5 如果配置要求报告全身指标，则重新计算（不使用掩码）
         if self.config.masked_mimic_obs.masked_mimic_report_full_body_metrics:
             translation_mask_coeff = self.num_bodies
             rotation_mask_coeff = self.num_bodies
@@ -900,30 +967,35 @@ class BaseMaskedMimic(MaskedMimicHumanoid):
             )
             max_joint_err = (ref_gt - gt).pow(2).sum(-1).sqrt().max(-1)[0]
 
+        # 9.6 计算旋转误差（四元数差异）
         gr_err = (
             quat_diff_norm(gr, ref_gr, self.w_last)[:, active_bodies_ids]
             .mul(rotation_mask)
             .sum(-1)
             .div(rotation_mask_coeff)
         )
-        gr_err_degrees = gr_err * 180 / torch.pi
+        gr_err_degrees = gr_err * 180 / torch.pi  # 转换为角度便于理解
 
+        # ================================ 第十部分：汇总其他日志指标 ================================
         other_log_terms = {
-            "tracking_rew": tracking_rew,
-            "total_rew": self.rew_buf,
-            "cartesian_err": cartesian_err,
-            "gt_err": gt_err,
-            "gr_err": gr_err,
-            "gr_err_degrees": gr_err_degrees,
-            "max_joint_err": max_joint_err,
+            "tracking_rew": tracking_rew,       # 总跟踪奖励
+            "total_rew": self.rew_buf,          # 最终奖励（包含常数）
+            "cartesian_err": cartesian_err,     # 笛卡尔误差
+            "gt_err": gt_err,                   # 位置误差
+            "gr_err": gr_err,                   # 旋转误差（弧度）
+            "gr_err_degrees": gr_err_degrees,   # 旋转误差（角度）
+            "max_joint_err": max_joint_err,     # 最大关节误差
         }
+        
+        # 记录这些指标的均值和标准差到日志
         for rew_name, rew in other_log_terms.items():
             self.log_dict[f"{rew_name}_mean"] = rew.mean()
             self.log_dict[f"{rew_name}_std"] = rew.std()
 
-        self.last_unscaled_rewards: Dict[str, Tensor] = rew_dict
-        self.last_scaled_rewards = self.last_scaled_rewards
-        self.last_other_rewards = other_log_terms
+        # ================================ 第十一部分：保存奖励信息供后续使用 ================================
+        self.last_unscaled_rewards: Dict[str, Tensor] = rew_dict          # 原始奖励
+        self.last_scaled_rewards = self.last_scaled_rewards                # 缩放后奖励
+        self.last_other_rewards = other_log_terms                          # 其他指标
 
     def compute_observations(self, env_ids=None):
         super().compute_observations(env_ids)

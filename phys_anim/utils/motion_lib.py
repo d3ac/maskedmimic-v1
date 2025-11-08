@@ -525,8 +525,8 @@ class MotionLib(DeviceDtypeModuleMixin):
             root_vel=None,              # 根部速度（这里未使用，会从rb_vel中提取）
             root_ang_vel=None,          # 根部角速度（这里未使用，会从rb_ang_vel中提取）
             key_body_pos=None,          # 关键身体部位（会在后续处理中提取）
-            dof_pos=dof_pos,            # 关节位置
-            dof_vel=dof_vel,            # 关节速度
+            dof_pos=dof_pos,            # 关节位置（局部坐标系，相对于父关节的角度/姿态）
+            dof_vel=dof_vel,            # 关节速度（局部坐标系，关节角速度）
             rb_pos=global_translation,  # 所有刚体的全局位置
             rb_rot=global_rotation,     # 所有刚体的全局旋转
             local_rot=local_rotation,   # 局部旋转
