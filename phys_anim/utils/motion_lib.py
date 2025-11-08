@@ -394,47 +394,83 @@ class MotionLib(DeviceDtypeModuleMixin):
     def get_mimic_motion_state(
         self, sub_motion_ids, motion_times, joint_3d_format="exp_map"
     ) -> MotionState:
+        """
+        获取模仿学习所需的参考动作状态。
+        
+        该函数是训练中最核心的函数之一，它根据给定的动作ID和时间，通过帧间插值
+        从预加载的动作库中提取参考状态，用于与仿真环境中的实际状态进行对比计算奖励。
+        
+        Args:
+            sub_motion_ids: 子动作ID，shape (num_envs,)
+            motion_times: 当前动作进行到的时间点，shape (num_envs,)
+            joint_3d_format: 关节3D表示格式，默认为 "exp_map"
+            
+        Returns:
+            MotionState: 包含参考动作状态的对象，包括位置、旋转、速度等信息
+        """
+        # 1. 将子动作ID映射到主动作ID
+        # 因为一个主动作可能包含多个子动作片段
         motion_ids = self.state.sub_motion_to_motion[sub_motion_ids]
 
+        # 2. 获取动作长度并确保时间在有效范围内
         motion_len = self.state.motion_lengths[motion_ids]
         motion_times = motion_times.clip(min=0).clip(
             max=motion_len
-        )  # Making sure time is in bounds
+        )  # 将时间裁剪到 [0, motion_len] 范围内
 
+        # 3. 获取动作的帧数和帧间时间间隔
         num_frames = self.state.motion_num_frames[motion_ids]
-        dt = self.state.motion_dt[motion_ids]
+        dt = self.state.motion_dt[motion_ids]  # 每帧之间的时间间隔
 
+        # 4. 计算帧混合参数
+        # 返回：frame_idx0 (前一帧索引), frame_idx1 (后一帧索引), blend (混合权重)
+        # blend=0 表示完全使用 frame_idx0，blend=1 表示完全使用 frame_idx1
         frame_idx0, frame_idx1, blend = self._calc_frame_blend(
             motion_times, motion_len, num_frames, dt
         )
 
-        f0l = frame_idx0 + self.length_starts[motion_ids]
-        f1l = frame_idx1 + self.length_starts[motion_ids]
+        # 5. 计算在全局张量中的实际索引位置
+        # length_starts 记录了每个动作在连续张量中的起始位置
+        f0l = frame_idx0 + self.length_starts[motion_ids]  # 前一帧的全局索引
+        f1l = frame_idx1 + self.length_starts[motion_ids]  # 后一帧的全局索引
 
+        # 6. 从预加载的张量中提取前后两帧的数据
+        # gts: global translations (全局位置)
         global_translation0 = self.gts[f0l]
         global_translation1 = self.gts[f1l]
 
+        # grs: global rotations (全局旋转，四元数)
         global_rotation0 = self.grs[f0l]
         global_rotation1 = self.grs[f1l]
 
+        # lrs: local rotations (局部旋转，相对于父关节)
         local_rotation0 = self.lrs[f0l]
         local_rotation1 = self.lrs[f1l]
 
+        # gvs: global velocities (全局线速度)
         global_vel0 = self.gvs[f0l]
         global_vel1 = self.gvs[f1l]
 
+        # gavs: global angular velocities (全局角速度)
         global_ang_vel0 = self.gavs[f0l]
         global_ang_vel1 = self.gavs[f1l]
 
+        # dvs: dof velocities (关节速度)
         dof_vel0 = self.dvs[f0l]
         dof_vel1 = self.dvs[f1l]
 
-        blend = blend.unsqueeze(-1)
-        blend_exp = blend.unsqueeze(-1)
+        # 7. 扩展 blend 的维度以便进行广播操作
+        blend = blend.unsqueeze(-1)          # shape: (num_envs, 1)
+        blend_exp = blend.unsqueeze(-1)      # shape: (num_envs, 1, 1)
 
+        # 8. 对前后两帧进行插值，得到指定时间点的平滑状态
+        
+        # 位置插值：线性插值
         global_translation: Tensor = (
             1.0 - blend_exp
         ) * global_translation0 + blend_exp * global_translation1
+        
+        # 旋转插值：球面线性插值 (SLERP)，确保旋转的平滑性
         global_rotation: Tensor = torch_utils.slerp(
             global_rotation0, global_rotation1, blend_exp
         )
@@ -443,25 +479,33 @@ class MotionLib(DeviceDtypeModuleMixin):
             local_rotation0, local_rotation1, blend_exp
         )
 
-        if hasattr(self, "dof_pos"):  # H1 joints
+        # 9. 计算或插值关节位置 (dof_pos)
+        if hasattr(self, "dof_pos"):  # 针对H1等特殊机器人，直接存储了dof_pos
             dof_pos = (1.0 - blend) * self.dof_pos[f0l] + blend * self.dof_pos[f1l]
-        else:
+        else:  # 对于SMPL等模型，从局部旋转转换为关节位置
             dof_pos: Tensor = self._local_rotation_to_dof(
                 local_rotation, joint_3d_format
             )
 
+        # 速度插值：线性插值
         global_vel = (1.0 - blend_exp) * global_vel0 + blend_exp * global_vel1
         global_ang_vel = (
             1.0 - blend_exp
         ) * global_ang_vel0 + blend_exp * global_ang_vel1
         dof_vel = (1.0 - blend) * dof_vel0 + blend * dof_vel1
 
+        # 10. 应用高度调整（如果需要）
+        # 对z轴（高度）进行修正，用于适配不同的地形或机器人高度
         global_translation[:, :, 2] += self.ref_height_adjust
 
+        # 11. 四元数格式转换（如果需要）
+        # 根据配置决定四元数的w分量是在最后还是最前
         if not self.w_last:
             global_rotation = rotations.xyzw_to_wxyz(global_rotation)
             local_rotation = rotations.xyzw_to_wxyz(local_rotation)
 
+        # 12. 应用刚体和关节的索引转换（如果需要）
+        # 这些转换用于适配不同机器人模型的刚体和关节顺序
         if self.rb_conversion is not None:
             global_translation = global_translation[:, self.rb_conversion]
             global_rotation = global_rotation[:, self.rb_conversion]
@@ -473,19 +517,21 @@ class MotionLib(DeviceDtypeModuleMixin):
         if self.local_rot_conversion is not None:
             local_rotation = local_rotation[:, self.local_rot_conversion]
 
+        # 13. 构建并返回 MotionState 对象
+        # 这个对象包含了训练时用于对比的所有参考状态信息
         motion_state = MotionState(
-            root_pos=None,
-            root_rot=None,
-            root_vel=None,
-            root_ang_vel=None,
-            key_body_pos=None,
-            dof_pos=dof_pos,
-            dof_vel=dof_vel,
-            rb_pos=global_translation,
-            rb_rot=global_rotation,
-            local_rot=local_rotation,
-            rb_vel=global_vel,
-            rb_ang_vel=global_ang_vel,
+            root_pos=None,              # 根部位置（这里未使用，会从rb_pos中提取）
+            root_rot=None,              # 根部旋转（这里未使用，会从rb_rot中提取）
+            root_vel=None,              # 根部速度（这里未使用，会从rb_vel中提取）
+            root_ang_vel=None,          # 根部角速度（这里未使用，会从rb_ang_vel中提取）
+            key_body_pos=None,          # 关键身体部位（会在后续处理中提取）
+            dof_pos=dof_pos,            # 关节位置
+            dof_vel=dof_vel,            # 关节速度
+            rb_pos=global_translation,  # 所有刚体的全局位置
+            rb_rot=global_rotation,     # 所有刚体的全局旋转
+            local_rot=local_rotation,   # 局部旋转
+            rb_vel=global_vel,          # 所有刚体的线速度
+            rb_ang_vel=global_ang_vel,  # 所有刚体的角速度
         )
 
         return motion_state
